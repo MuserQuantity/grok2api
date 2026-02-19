@@ -35,11 +35,12 @@ class ModelInfo(BaseModel):
     description: str = ""
     is_video: bool = False
     is_image: bool = False
+    is_image_edit: bool = False
 
 
 class ModelService:
     """模型管理服务"""
-    
+
     MODELS = [
         ModelInfo(
             model_id="grok-3",
@@ -56,6 +57,22 @@ class ModelService:
             cost=Cost.LOW,
             model_mode="MODEL_MODE_FAST",
             display_name="Grok 3 Fast"
+        ),
+        ModelInfo(
+            model_id="grok-3-mini",
+            grok_model="grok-3",
+            rate_limit_model="grok-3",
+            model_mode="MODEL_MODE_GROK_3_MINI_THINKING",
+            cost=Cost.LOW,
+            display_name="Grok 3 Mini"
+        ),
+        ModelInfo(
+            model_id="grok-3-thinking",
+            grok_model="grok-3",
+            rate_limit_model="grok-3",
+            model_mode="MODEL_MODE_GROK_3_THINKING",
+            cost=Cost.LOW,
+            display_name="Grok 3 Thinking"
         ),
         ModelInfo(
             model_id="grok-4",
@@ -82,6 +99,14 @@ class ModelService:
             display_name="Grok 4 Fast"
         ),
         ModelInfo(
+            model_id="grok-4-thinking",
+            grok_model="grok-4",
+            rate_limit_model="grok-4",
+            model_mode="MODEL_MODE_GROK_4_THINKING",
+            cost=Cost.LOW,
+            display_name="Grok 4 Thinking"
+        ),
+        ModelInfo(
             model_id="grok-4-heavy",
             grok_model="grok-4",
             rate_limit_model="grok-4-heavy",
@@ -97,6 +122,14 @@ class ModelService:
             model_mode="MODEL_MODE_AUTO",
             cost=Cost.LOW,
             display_name="Grok 4.1"
+        ),
+        ModelInfo(
+            model_id="grok-4.1-mini",
+            grok_model="grok-4-1-thinking-1129",
+            rate_limit_model="grok-4-1-thinking-1129",
+            model_mode="MODEL_MODE_GROK_4_1_MINI_THINKING",
+            cost=Cost.LOW,
+            display_name="Grok 4.1 Mini"
         ),
         ModelInfo(
             model_id="grok-4.1-fast",
@@ -119,8 +152,16 @@ class ModelService:
             grok_model="grok-4-1-thinking-1129",
             rate_limit_model="grok-4-1-thinking-1129",
             model_mode="MODEL_MODE_GROK_4_1_THINKING",
-            cost=Cost.HIGH, 
+            cost=Cost.HIGH,
             display_name="Grok 4.1 Thinking"
+        ),
+        ModelInfo(
+            model_id="grok-4.20-beta",
+            grok_model="grok-420",
+            rate_limit_model="grok-420",
+            model_mode="MODEL_MODE_GROK_420",
+            cost=Cost.LOW,
+            display_name="Grok 4.20 Beta"
         ),
         ModelInfo(
             model_id="grok-imagine-1.0",
@@ -140,7 +181,7 @@ class ModelService:
             cost=Cost.HIGH,
             display_name="Grok Image Edit",
             description="Image edit model",
-            is_image=True
+            is_image_edit=True
         ),
         ModelInfo(
             model_id="grok-imagine-1.0-video",
@@ -153,19 +194,19 @@ class ModelService:
             is_video=True
         ),
     ]
-    
+
     _map = {m.model_id: m for m in MODELS}
-    
+
     @classmethod
     def get(cls, model_id: str) -> Optional[ModelInfo]:
         """获取模型信息"""
         return cls._map.get(model_id)
-    
+
     @classmethod
     def list(cls) -> list[ModelInfo]:
         """获取所有模型"""
         return list(cls._map.values())
-    
+
     @classmethod
     def valid(cls, model_id: str) -> bool:
         """模型是否有效"""

@@ -9,9 +9,23 @@ timeout = 120
 base_proxy_url = ""
 asset_proxy_url = ""
 cf_clearance = ""
+# curl_cffi 浏览器指纹
+browser = "chrome136"
+# User-Agent 字符串
+user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 max_retry = 3
 retry_status_codes = [401,429,403]
+# 退避基础延迟（秒）
+retry_backoff_base = 0.5
+# 退避倍率
+retry_backoff_factor = 2.0
+# 单次重试最大延迟（秒）
+retry_backoff_max = 20.0
+# 总重试预算时间（秒）
+retry_budget = 60.0
 image_generation_method = "legacy"
+# 是否禁用 Grok 记忆功能
+disable_memory = true
 
 [app]
 app_url = "http://127.0.0.1:8000"
@@ -24,6 +38,8 @@ video_format = "url"
 [token]
 auto_refresh = true
 refresh_interval_hours = 8
+# Super Token 刷新间隔（小时）
+super_refresh_interval_hours = 2
 fail_threshold = 5
 save_delay_ms = 500
 reload_interval_sec = 30
@@ -34,6 +50,85 @@ nsfw_refresh_retries = 3
 enable_auto_clean = true
 limit_mb = 1024
 keep_base64_cache = true
+
+# ==================== 对话配置 ====================
+[chat]
+# 并发上限
+concurrent = 50
+# 超时时间（秒）
+timeout = 60
+# 流式空闲超时时间（秒）
+stream_timeout = 60
+
+# ==================== 图像配置 ====================
+[image]
+# WebSocket 请求超时时间（秒）
+timeout = 60
+# WebSocket 流式空闲超时时间（秒）
+stream_timeout = 60
+# 中等图后等待最终图的超时秒数
+final_timeout = 15
+# 是否启用 NSFW
+nsfw = true
+# 判定为中等质量图的最小字节数
+medium_min_bytes = 30000
+# 判定为最终图的最小字节数
+final_min_bytes = 100000
+
+# ==================== 视频配置 ====================
+[video]
+# 并发上限
+concurrent = 100
+# 超时时间（秒）
+timeout = 60
+# 流式空闲超时时间（秒）
+stream_timeout = 60
+
+# ==================== 语音配置 ====================
+[voice]
+# 超时时间（秒）
+timeout = 60
+
+# ==================== 资产配置 ====================
+[asset]
+# 上传并发数
+upload_concurrent = 100
+# 上传超时时间（秒）
+upload_timeout = 60
+# 下载并发数
+download_concurrent = 100
+# 下载超时时间（秒）
+download_timeout = 60
+# 资产查询并发数
+list_concurrent = 100
+# 资产查询超时时间（秒）
+list_timeout = 60
+# 资产查询批次大小（Token 维度）
+list_batch_size = 50
+# 资产删除并发数
+delete_concurrent = 100
+# 资产删除超时时间（秒）
+delete_timeout = 60
+# 资产删除批次大小（Token 维度）
+delete_batch_size = 50
+
+# ==================== NSFW ====================
+[nsfw]
+# NSFW 批量开启并发上限
+concurrent = 60
+# NSFW 批量开启批次大小
+batch_size = 30
+# NSFW 请求超时时间（秒）
+timeout = 60
+
+# ==================== 用量配置 ====================
+[usage]
+# Usage 批量开启并发上限
+concurrent = 100
+# Usage 批量开启批次大小
+batch_size = 50
+# Usage 请求超时时间（秒）
+timeout = 60
 
 [performance]
 assets_max_concurrent = 25

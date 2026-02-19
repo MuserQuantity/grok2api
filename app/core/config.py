@@ -187,6 +187,79 @@ def _apply_legacy_config(
     return changed
 
 
+def _migrate_deprecated_config(
+    config: Dict[str, Any], valid_sections: set
+) -> tuple[Dict[str, Any], set]:
+    """
+    迁移废弃的配置节到新配置结构
+
+    Returns:
+        (迁移后的配置, 废弃的配置节集合)
+    """
+    # 配置映射规则：旧配置 -> 新配置
+    MIGRATION_MAP = {
+        # performance.* -> 对应的新配置节
+        "performance.assets_max_concurrent": [
+            "asset.upload_concurrent",
+            "asset.download_concurrent",
+            "asset.list_concurrent",
+            "asset.delete_concurrent",
+        ],
+        "performance.assets_delete_batch_size": "asset.delete_batch_size",
+        "performance.assets_batch_size": "asset.list_batch_size",
+        "performance.media_max_concurrent": ["chat.concurrent", "video.concurrent"],
+        "performance.usage_max_concurrent": "usage.concurrent",
+        "performance.usage_batch_size": "usage.batch_size",
+        "performance.nsfw_max_concurrent": "nsfw.concurrent",
+        "performance.nsfw_batch_size": "nsfw.batch_size",
+        # grok.* -> 对应的新配置节
+        "grok.video_idle_timeout": "video.stream_timeout",
+        "grok.image_ws_nsfw": "image.nsfw",
+        "grok.image_ws_blocked_seconds": "image.final_timeout",
+        "grok.image_ws_final_min_bytes": "image.final_min_bytes",
+        "grok.image_ws_medium_min_bytes": "image.medium_min_bytes",
+    }
+
+    deprecated_sections = set()
+    result = deepcopy(config)
+    migrated_count = 0
+
+    # 处理废弃配置节或旧配置键
+    for old_section, old_values in config.items():
+        if not isinstance(old_values, dict):
+            continue
+        for old_key, old_value in old_values.items():
+            old_path = f"{old_section}.{old_key}"
+            new_paths = MIGRATION_MAP.get(old_path)
+            if not new_paths:
+                continue
+            if isinstance(new_paths, str):
+                new_paths = [new_paths]
+            for new_path in new_paths:
+                try:
+                    new_section, new_key = new_path.split(".", 1)
+                    if new_section not in result:
+                        result[new_section] = {}
+                    if new_key not in result[new_section]:
+                        result[new_section][new_key] = old_value
+                    migrated_count += 1
+                    logger.debug(
+                        f"Migrated config: {old_path} -> {new_path} = {old_value}"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Skip config migration for {old_path}: {e}"
+                    )
+                    continue
+
+    if migrated_count > 0:
+        logger.info(
+            f"Migrated {migrated_count} config items from deprecated/legacy sections"
+        )
+
+    return result, deprecated_sections
+
+
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
     """深度合并字典：override 覆盖 base。"""
     if not isinstance(base, dict):
@@ -270,10 +343,20 @@ class Config:
                 except Exception as e:
                     logger.warning(f"Failed to migrate legacy config from {LEGACY_CONFIG_FILE}: {e}")
 
+            # Migrate deprecated config sections (e.g. performance.* -> chat.*/asset.*/etc.)
+            valid_sections = set(self._defaults.keys())
+            config_data, deprecated_sections = _migrate_deprecated_config(
+                config_data, valid_sections
+            )
+            if deprecated_sections:
+                logger.info(
+                    f"Cleaned deprecated config sections: {deprecated_sections}"
+                )
+
             merged = _deep_merge(self._defaults, config_data)
 
             # 自动回填缺失配置到存储
-            should_persist = (not from_remote) or (merged != before_legacy)
+            should_persist = (not from_remote) or (merged != before_legacy) or deprecated_sections
             if should_persist:
                 async with storage.acquire_lock("config_save", timeout=10):
                     await storage.save_config(merged)
@@ -281,6 +364,8 @@ class Config:
                     logger.info(
                         f"Initialized remote storage ({storage.__class__.__name__}) with config baseline."
                     )
+                if deprecated_sections:
+                    logger.info("Configuration automatically migrated and cleaned.")
 
             self._config = merged
         except Exception as e:
