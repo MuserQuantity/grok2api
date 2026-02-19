@@ -17,7 +17,7 @@ import {
   sendExperimentalImageEditRequest,
 } from "../grok/imagineExperimental";
 import { addRequestLog } from "../repo/logs";
-import { applyCooldown, recordTokenFailure, selectBestToken } from "../repo/tokens";
+import { applyCooldown, recordTokenFailure, recordTokenSuccess, selectBestToken } from "../repo/tokens";
 import type { ApiAuthInfo } from "../auth";
 import { getApiKeyLimits } from "../repo/apiKeys";
 import { localDayString, tryConsumeDailyUsage, tryConsumeDailyUsageMulti } from "../repo/apiKeyUsage";
@@ -1297,6 +1297,9 @@ openAiRoutes.post("/chat/completions", async (c) => {
           break;
         }
 
+        // 请求成功，重置失败计数
+        await recordTokenSuccess(c.env.DB, jwt);
+
         if (stream) {
           const sse = createOpenAiStreamFromGrokNdjson(upstream, {
             cookie,
@@ -1584,6 +1587,7 @@ openAiRoutes.post("/images/generations", async (c) => {
             tokenSuffix: getTokenSuffix(experimentalToken.token),
             error: "",
           });
+          await recordTokenSuccess(c.env.DB, experimentalToken.token);
           return c.json(buildImageJsonPayload(responseField, selected));
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -1876,6 +1880,7 @@ openAiRoutes.post("/images/edits", async (c) => {
         if (!urls.length) throw new Error("Experimental image edit returned no images");
         const selected = pickImageResults(urls, n);
 
+        await recordTokenSuccess(c.env.DB, chosen.token);
         await recordImageLog({
           env: c.env,
           ip,
@@ -1910,6 +1915,7 @@ openAiRoutes.post("/images/edits", async (c) => {
     const urls = dedupeImages(urlsNested.flat().filter(Boolean));
     const selected = pickImageResults(urls, n);
 
+    await recordTokenSuccess(c.env.DB, chosen.token);
     await recordImageLog({
       env: c.env,
       ip,

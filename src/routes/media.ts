@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Env } from "../env";
 import { getSettings, normalizeCfCookie } from "../settings";
-import { applyCooldown, recordTokenFailure, selectBestToken } from "../repo/tokens";
+import { applyCooldown, recordTokenFailure, recordTokenSuccess, selectBestToken } from "../repo/tokens";
 import { getDynamicHeaders } from "../grok/headers";
 import { deleteCacheRow, touchCacheRow, upsertCacheRow, type CacheType } from "../repo/cache";
 import { nowMs } from "../utils/time";
@@ -224,6 +224,8 @@ mediaRoutes.get("/images/:imgPath{.+}", async (c) => {
     await applyCooldown(c.env.DB, chosen.token, upstream.status);
     return new Response(`Upstream ${upstream.status}`, { status: upstream.status });
   }
+
+  await recordTokenSuccess(c.env.DB, chosen.token);
 
   const contentType = upstream.headers.get("content-type") ?? "";
   const contentLengthHeader = upstream.headers.get("content-length") ?? "";

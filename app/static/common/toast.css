@@ -50,6 +50,16 @@
   color: #dc2626;
 }
 
+.toast-warning .toast-icon {
+  background: #fffbeb;
+  color: #d97706;
+}
+
+.toast-info .toast-icon {
+  background: #eff6ff;
+  color: #2563eb;
+}
+
 .toast-content {
   flex: 1;
   font-size: 12px;

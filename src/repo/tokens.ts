@@ -62,6 +62,7 @@ export function tokenRowToInfo(row: TokenRow): {
   const status = (() => {
     if (row.status === "expired") return "失效";
     if (cooldownRemainingMs) return "冷却中";
+    if (row.failed_count >= MAX_FAILURES) return "失败过多";
     if (row.token_type === "ssoSuper") {
       if (row.remaining_queries === -1 && row.heavy_remaining_queries === -1) return "未使用";
       if (row.remaining_queries === 0 || row.heavy_remaining_queries === 0) return "额度耗尽";
@@ -152,25 +153,57 @@ export async function selectBestToken(db: Env["DB"], model: string): Promise<{ t
   const isHeavy = model === "grok-4-heavy";
   const field = isHeavy ? "heavy_remaining_queries" : "remaining_queries";
 
-  const pick = async (token_type: TokenType): Promise<{ token: string; token_type: TokenType } | null> => {
+  const pick = async (token_type: TokenType, relaxed = false): Promise<{ token: string; token_type: TokenType } | null> => {
+    const conditions = relaxed
+      ? // fallback: 忽略 failed_count 和 expired 状态，给"失效"token 一次重试机会
+        `WHERE token_type = ?
+           AND (cooldown_until IS NULL OR cooldown_until <= ?)
+           AND ${field} != 0`
+      : `WHERE token_type = ?
+           AND status != 'expired'
+           AND failed_count < ?
+           AND (cooldown_until IS NULL OR cooldown_until <= ?)
+           AND ${field} != 0`;
+
+    const params = relaxed
+      ? [token_type, now]
+      : [token_type, MAX_FAILURES, now];
+
     const row = await dbFirst<{ token: string }>(
       db,
       `SELECT token FROM tokens
-       WHERE token_type = ?
-         AND status != 'expired'
-         AND failed_count < ?
-         AND (cooldown_until IS NULL OR cooldown_until <= ?)
-         AND ${field} != 0
-       ORDER BY CASE WHEN ${field} = -1 THEN 0 ELSE 1 END, ${field} DESC, created_time ASC
+       ${conditions}
+       ORDER BY CASE WHEN ${field} = -1 THEN 0 ELSE 1 END, ${field} DESC, failed_count ASC, created_time ASC
        LIMIT 1`,
-      [token_type, MAX_FAILURES, now],
+      params,
     );
     return row ? { token: row.token, token_type } : null;
   };
 
-  if (isHeavy) return pick("ssoSuper");
+  // 第一轮：严格筛选
+  let result: { token: string; token_type: TokenType } | null;
+  if (isHeavy) {
+    result = await pick("ssoSuper");
+  } else {
+    result = (await pick("sso")) ?? (await pick("ssoSuper"));
+  }
+  if (result) return result;
 
-  return (await pick("sso")) ?? (await pick("ssoSuper"));
+  // 第二轮：放宽条件，尝试失败过多/expired 的 token（可能已恢复）
+  if (isHeavy) {
+    result = await pick("ssoSuper", true);
+  } else {
+    result = (await pick("sso", true)) ?? (await pick("ssoSuper", true));
+  }
+  if (result) {
+    // 重置状态，给它一次新的机会
+    await dbRun(
+      db,
+      "UPDATE tokens SET failed_count = 0, status = 'active' WHERE token = ?",
+      [result.token],
+    );
+  }
+  return result;
 }
 
 export async function recordTokenFailure(
@@ -192,6 +225,14 @@ export async function recordTokenFailure(
   if (status >= 400 && status < 500 && row.failed_count >= MAX_FAILURES) {
     await dbRun(db, "UPDATE tokens SET status = 'expired' WHERE token = ?", [token]);
   }
+}
+
+export async function recordTokenSuccess(db: Env["DB"], token: string): Promise<void> {
+  await dbRun(
+    db,
+    "UPDATE tokens SET failed_count = 0, last_failure_time = NULL, last_failure_reason = NULL, cooldown_until = NULL WHERE token = ?",
+    [token],
+  );
 }
 
 export async function applyCooldown(db: Env["DB"], token: string, status: number): Promise<void> {
