@@ -16,6 +16,9 @@ REFRESH_INTERVAL_HOURS = 8
 REFRESH_BATCH_SIZE = 10
 REFRESH_CONCURRENCY = 5
 
+# 默认 usage flush 间隔（秒）
+DEFAULT_USAGE_FLUSH_INTERVAL_SEC = 5
+
 
 class TokenManager:
     """管理 Token 的增删改查和配额同步"""
@@ -31,6 +34,12 @@ class TokenManager:
         self._save_task: Optional[asyncio.Task] = None
         self._save_delay = 0.5
         self._last_reload_at = 0.0
+        # Dual-tracking for lazy usage flush
+        self._has_state_changes = False
+        self._has_usage_changes = False
+        self._state_change_seq = 0
+        self._usage_change_seq = 0
+        self._last_usage_flush_at = 0.0
     
     @classmethod
     async def get_instance(cls) -> "TokenManager":
@@ -107,24 +116,72 @@ class TokenManager:
             return
         await self.reload()
 
-    async def _save(self):
-        """保存变更"""
+    def _mark_state_change(self):
+        """标记结构/状态变更（token 添加、删除、状态转换等）"""
+        self._has_state_changes = True
+        self._state_change_seq += 1
+
+    def _mark_usage_change(self):
+        """标记用量变更（配额消耗、use_count 递增等）"""
+        self._has_usage_changes = True
+        self._usage_change_seq += 1
+
+    async def _save(self, force: bool = False):
+        """保存变更（支持 usage-only 懒刷新）"""
         async with self._save_lock:
             try:
+                # Lazy flush: usage-only changes can be deferred
+                if not force and not self._has_state_changes and self._has_usage_changes:
+                    interval_sec = get_config(
+                        "token.usage_flush_interval_sec",
+                        DEFAULT_USAGE_FLUSH_INTERVAL_SEC,
+                    )
+                    try:
+                        interval_sec = float(interval_sec)
+                    except Exception:
+                        interval_sec = float(DEFAULT_USAGE_FLUSH_INTERVAL_SEC)
+                    if interval_sec > 0:
+                        now = time.monotonic()
+                        if now - self._last_usage_flush_at < interval_sec:
+                            self._dirty = True
+                            return  # Defer: skip flush, mark dirty for later
+
+                # Snapshot sequence numbers
+                state_seq = self._state_change_seq
+                usage_seq = self._usage_change_seq
+
                 data = {}
                 for pool_name, pool in self.pools.items():
                     data[pool_name] = [
                         info.model_dump() for info in pool.list()
                     ]
-                
+
                 storage = get_storage()
                 async with storage.acquire_lock("tokens_save", timeout=10):
                     await storage.save_tokens(data)
+
+                # Clear flags only if no new changes arrived during flush
+                if state_seq == self._state_change_seq:
+                    self._has_state_changes = False
+                if usage_seq == self._usage_change_seq:
+                    self._has_usage_changes = False
+                    self._last_usage_flush_at = time.monotonic()
             except Exception as e:
                 logger.error(f"Failed to save tokens: {e}")
 
-    def _schedule_save(self):
-        """合并高频保存请求，减少写入开销"""
+    def _schedule_save(self, change_kind: str = "state"):
+        """合并高频保存请求，减少写入开销
+
+        Args:
+            change_kind: "state" 表示结构/状态变更（立即刷新），
+                         "usage" 表示用量变更（可延迟刷新），
+                         "_resched" 内部重调度，不重复标记
+        """
+        if change_kind == "state":
+            self._mark_state_change()
+        elif change_kind == "usage":
+            self._mark_usage_change()
+
         delay_ms = get_config("token.save_delay_ms", 500)
         try:
             delay_ms = float(delay_ms)
@@ -152,7 +209,7 @@ class TokenManager:
         finally:
             self._save_task = None
             if self._dirty:
-                self._schedule_save()
+                self._schedule_save(change_kind="_resched")
 
     @staticmethod
     def _extract_cookie_value(cookie_str: str, name: str) -> str | None:
@@ -250,7 +307,7 @@ class TokenManager:
                 logger.debug(
                     f"Token {raw_token[:10]}...: consumed {consumed} quota (bucket={bucket}), use_count={token.use_count}"
                 )
-                self._schedule_save()
+                self._schedule_save(change_kind="usage")
                 return True
         
         logger.warning(f"Token {raw_token[:10]}...: not found for consumption")
@@ -324,8 +381,8 @@ class TokenManager:
                     f"Token {raw_token[:10]}...: synced quota (bucket={bucket}, model={rate_limit_model}) "
                     f"{old_quota} -> {new_quota} (consumed: {consumed}, use_count: {target_token.use_count})"
                 )
-                
-                self._schedule_save()
+
+                self._schedule_save(change_kind="usage")
                 return True
                 
         except Exception as e:

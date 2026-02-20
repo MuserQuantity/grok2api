@@ -180,6 +180,26 @@
   display: block;
 }
 
+.img-retry {
+  width: 100%;
+  min-height: 120px;
+  border: 1px dashed rgba(0, 0, 0, 0.15);
+  border-radius: 8px;
+  background: #fafafa;
+  color: var(--accents-5, #888);
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 0.2s ease, border-color 0.2s ease;
+}
+
+.img-retry:hover {
+  color: #111;
+  border-color: #111;
+}
+
 .result-placeholder {
   min-height: 140px;
   display: flex;

@@ -21,6 +21,8 @@ export interface GrokSettings {
   cf_clearance?: string; // stored as VALUE only (no "cf_clearance=" prefix)
   x_statsig_id?: string;
   dynamic_statsig?: boolean;
+  browser?: string;
+  user_agent?: string;
   filtered_tags?: string;
   show_thinking?: boolean;
   temporary?: boolean;
@@ -98,6 +100,8 @@ const DEFAULTS: SettingsBundle = {
     cf_clearance: "",
     x_statsig_id: "",
     dynamic_statsig: true,
+    browser: "chrome136",
+    user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
     filtered_tags: "xaiartifact,xai:tool_usage_card",
     show_thinking: true,
     temporary: false,

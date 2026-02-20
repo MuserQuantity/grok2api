@@ -191,6 +191,34 @@ function renderContent(container, content, forceText) {
     return;
   }
   container.innerHTML = html;
+  enhanceBrokenImages(container);
+}
+
+function enhanceBrokenImages(root) {
+  if (!root) return;
+  root.querySelectorAll('img').forEach((img) => {
+    if (img.dataset.retryBound) return;
+    img.dataset.retryBound = '1';
+    img.addEventListener('error', () => {
+      if (img.dataset.failed) return;
+      img.dataset.failed = '1';
+      const wrapper = document.createElement('button');
+      wrapper.type = 'button';
+      wrapper.className = 'img-retry';
+      wrapper.textContent = '点击重试';
+      wrapper.addEventListener('click', () => {
+        const original = img.getAttribute('src') || '';
+        const sep = original.includes('?') ? '&' : '?';
+        img.dataset.failed = '';
+        img.src = `${original}${sep}t=${Date.now()}`;
+        wrapper.replaceWith(img);
+      });
+      img.replaceWith(wrapper);
+    });
+    img.addEventListener('load', () => {
+      if (img.dataset.failed) img.dataset.failed = '';
+    });
+  });
 }
 
 async function init() {
@@ -933,6 +961,22 @@ function updateImageCardCompleted(card, src, failed) {
   const img = document.createElement('img');
   img.alt = 'image';
   img.src = src;
+  img.addEventListener('error', () => {
+    if (img.dataset.failed) return;
+    img.dataset.failed = '1';
+    const wrapper = document.createElement('button');
+    wrapper.type = 'button';
+    wrapper.className = 'img-retry';
+    wrapper.textContent = '点击重试';
+    wrapper.addEventListener('click', () => {
+      const original = img.getAttribute('src') || '';
+      const sep = original.includes('?') ? '&' : '?';
+      img.dataset.failed = '';
+      img.src = `${original}${sep}t=${Date.now()}`;
+      wrapper.replaceWith(img);
+    });
+    img.replaceWith(wrapper);
+  });
   card.insertBefore(img, card.firstChild);
 
   if (status) status.textContent = '完成';

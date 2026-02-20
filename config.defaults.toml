@@ -42,6 +42,8 @@ refresh_interval_hours = 8
 super_refresh_interval_hours = 2
 fail_threshold = 5
 save_delay_ms = 500
+# 用量变更延迟刷新间隔（秒），减少高频写入
+usage_flush_interval_sec = 5
 reload_interval_sec = 30
 nsfw_refresh_concurrency = 10
 nsfw_refresh_retries = 3
