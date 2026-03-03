@@ -1009,11 +1009,11 @@
       const filename = `${autoNameParts.join('_')}.${ext}`;
 
       if (useFileSystemAPI && directoryHandle) {
-        saveToFileSystem(base64, filename).catch(() => {
-          downloadImage(base64, filename);
+        saveToFileSystem(raw, filename).catch(() => {
+          downloadImage(raw, filename);
         });
       } else {
-        downloadImage(base64, filename);
+        downloadImage(raw, filename);
       }
     }
   }
