@@ -104,8 +104,8 @@ app.get("/v1/admin/verify", async (c) => {
   return c.json({ error: "Unauthorized" }, 401);
 });
 
-app.route("/v1", openAiRoutes);
 app.route("/v1/public", publicRoutes);
+app.route("/v1", openAiRoutes);
 app.route("/", mediaRoutes);
 app.route("/", adminRoutes);
 
