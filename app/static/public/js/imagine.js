@@ -1189,7 +1189,7 @@
       updateCount(imageCount);
       updateLatency(data.elapsed_ms);
       updateError('');
-      appendImage(data.b64_json, data);
+      appendImage(data.url || data.b64_json, data);
     } else if (data.type === 'status') {
       if (data.status === 'running') {
         setStatus('connected', '生成中');

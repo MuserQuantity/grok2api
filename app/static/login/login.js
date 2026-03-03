@@ -22,7 +22,9 @@ async function login() {
     });
 
     if (res.ok) {
-      await storeAppKey(password);
+      const data = await res.json();
+      const sessionToken = data.api_key || password;
+      await storeAppKey(sessionToken);
       window.location.href = '/admin/token';
     } else {
       showToast('用户名或密码错误', 'error');
@@ -41,10 +43,13 @@ async function login() {
 
   if (!existingKey) return;
 
-  fetch('/v1/admin/verify', {
-    method: 'GET',
-    headers: { 'Authorization': `Bearer ${existingKey}` }
-  }).then(res => {
+  try {
+    const res = await fetch('/v1/admin/verify', {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${existingKey}` }
+    });
     if (res.ok) window.location.href = '/admin/token';
-  });
+  } catch (e) {
+    // ignore
+  }
 })();

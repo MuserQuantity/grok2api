@@ -45,11 +45,16 @@
         </a>
       </div>
       <div class="login-title">管理后台</div>
-      <div class="login-subtitle">请输入后台密码以继续</div>
+      <div class="login-subtitle">请输入账户名和密码以继续</div>
 
       <div class="login-form">
-        <input type="password" id="api-key-input" placeholder="后台密码 (app_key)" class="geist-input login-input">
-        <button onclick="login()" class="geist-button login-button">继续</button>
+        <input type="text" id="username-input" placeholder="账户名" autocomplete="username" class="geist-input login-input">
+        <input type="password" id="password-input" placeholder="密码" autocomplete="current-password" class="geist-input login-input">
+        <button onclick="login()" class="geist-button login-button">登录</button>
+      </div>
+
+      <div class="mt-3 text-xs text-[var(--accents-4)]">
+        <a href="/login" class="hover:text-black">公共入口</a>
       </div>
     </div>
   </div>
