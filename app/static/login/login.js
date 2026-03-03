@@ -23,7 +23,11 @@ async function login() {
 
     if (res.ok) {
       const data = await res.json();
-      const sessionToken = data.api_key || password;
+      const sessionToken = data.api_key;
+      if (!sessionToken) {
+        showToast('登录响应异常', 'error');
+        return;
+      }
       await storeAppKey(sessionToken);
       window.location.href = '/admin/token';
     } else {
