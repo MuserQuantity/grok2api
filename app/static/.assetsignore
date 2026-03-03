@@ -1,2 +1,7 @@
 _worker.js
 
+# Exclude large vendor files that exceed Cloudflare Workers' 25 MiB per-asset limit.
+# ffmpeg-core.wasm is ~31 MiB; CF Workers max is 25 MiB per asset.
+# Client-side loads ffmpeg from CDN via /video/vendor/ proxy, so not needed here.
+vendor/ffmpeg/
+
