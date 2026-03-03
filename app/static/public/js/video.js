@@ -1439,6 +1439,40 @@
           markTaskFinished(taskId, true);
           return;
         }
+
+        // --- CF Workers direct format (type/status events) ---
+        if (payload && payload.type === 'progress') {
+          const progress = Number(payload.progress || 0);
+          if (progress > 0) {
+            setIndeterminate(false);
+            taskState.progress = progress;
+            updateAggregateProgress();
+          }
+          // At progress=100 the backend includes a proxied video URL
+          const videoUrl = payload.proxy_video_url || payload.url || '';
+          if (videoUrl && !taskState.collectingContent) {
+            taskState.collectingContent = true;
+            taskState.contentBuffer = videoUrl;
+            renderVideoFromUrl(taskState, videoUrl);
+          }
+          return;
+        }
+        if (payload && payload.type === 'video' && payload.url) {
+          taskState.collectingContent = true;
+          taskState.contentBuffer = payload.url;
+          renderVideoFromUrl(taskState, payload.url);
+          return;
+        }
+        if (payload && payload.status === 'completed') {
+          markTaskFinished(taskId, false);
+          return;
+        }
+        if (payload && payload.status === 'running') {
+          setStatus('connected', `生成中 (${taskIds.length} 路)`);
+          return;
+        }
+
+        // --- OpenAI-compatible format (Python backend) ---
         const choice = payload.choices && payload.choices[0];
         const delta = choice && choice.delta ? choice.delta : null;
         if (delta && delta.content) {
@@ -1582,6 +1616,32 @@
           reject(new Error(String(payload.error || 'edit_video_failed')));
           return;
         }
+
+        // --- CF Workers direct format ---
+        if (payload && payload.type === 'progress') {
+          const videoUrl = payload.proxy_video_url || payload.url || '';
+          if (videoUrl) {
+            closeSafe();
+            done = true;
+            resolve(normalizePlayableVideoUrl(videoUrl));
+            return;
+          }
+        }
+        if (payload && payload.type === 'video' && payload.url) {
+          closeSafe();
+          done = true;
+          resolve(normalizePlayableVideoUrl(payload.url));
+          return;
+        }
+        if (payload && payload.status === 'completed') {
+          // completed without video URL found yet; let [DONE] handle final resolution
+          return;
+        }
+        if (payload && payload.status === 'running') {
+          return;
+        }
+
+        // --- OpenAI-compatible format (Python backend) ---
         const choice = payload.choices && payload.choices[0];
         const delta = choice && choice.delta ? choice.delta : null;
         if (delta && delta.content) {
@@ -1743,6 +1803,77 @@
               return;
             }
 
+            // --- CF Workers direct format (type/status events) ---
+            if (parsed.type === 'progress') {
+              const progress = Number(parsed.progress || 0);
+              if (progress > 0) {
+                taskState.progress = progress;
+                setIndeterminate(false);
+                updateProgress(progress);
+              }
+              const videoUrl = parsed.proxy_video_url || parsed.url || '';
+              if (videoUrl && !taskState.videoUrl) {
+                console.log('[SSE 调试] 解析到生成的视频 URL:', videoUrl);
+                taskState.videoUrl = videoUrl;
+                const item = spliceRun.placeholders.get(tid);
+                if (item) {
+                  item.classList.remove('is-generating');
+                  item.classList.remove('is-failed');
+                  renderVideoFromUrl({ previewItem: item }, videoUrl);
+                }
+                selectedVideoUrl = videoUrl;
+                if (editVideo) {
+                  editVideo.src = videoUrl;
+                  editVideo.load();
+                }
+                const newPostId = extractPostIdFromFileName(videoUrl);
+                if (newPostId) {
+                  currentExtendPostId = newPostId;
+                  currentFileAttachmentId = newPostId;
+                  console.log('[SSE 调试] 从新视频成功提取到新的 extend_post_id:', newPostId);
+                } else {
+                  console.warn('[SSE 调试] 未能从新视频地址提取出新的 extend_post_id!', videoUrl);
+                }
+                setEditMeta();
+                toast('视频延长完成', 'success');
+              }
+              return;
+            }
+            if (parsed.type === 'video' && parsed.url) {
+              if (!taskState.videoUrl) {
+                taskState.videoUrl = parsed.url;
+                const item = spliceRun.placeholders.get(tid);
+                if (item) {
+                  item.classList.remove('is-generating');
+                  item.classList.remove('is-failed');
+                  renderVideoFromUrl({ previewItem: item }, parsed.url);
+                }
+                selectedVideoUrl = parsed.url;
+                if (editVideo) {
+                  editVideo.src = parsed.url;
+                  editVideo.load();
+                }
+                const newPostId = extractPostIdFromFileName(parsed.url);
+                if (newPostId) {
+                  currentExtendPostId = newPostId;
+                  currentFileAttachmentId = newPostId;
+                }
+                setEditMeta();
+                toast('视频延长完成', 'success');
+              }
+              return;
+            }
+            if (parsed.status === 'completed') {
+              taskState.done = true;
+              source.close();
+              checkAllExtendDone(spliceRun);
+              return;
+            }
+            if (parsed.status === 'running') {
+              return;
+            }
+
+            // --- OpenAI-compatible format (Python backend) ---
             const choice = parsed.choices && parsed.choices[0];
             const delta = choice && choice.delta ? choice.delta : null;
             if (delta && delta.content) {
@@ -1784,8 +1915,6 @@
                       renderVideoFromUrl({ previewItem: item }, videoUrl);
                     }
                   }
-
-
 
                   // 更新工作区视频和 extendPostId
                   selectedVideoUrl = videoUrl;
