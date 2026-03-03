@@ -911,10 +911,15 @@
     }
   }
 
-  function appendImage(base64, meta) {
+  function appendImage(raw, meta) {
     if (!waterfall) return;
-    if (autoFilterToggle && autoFilterToggle.checked) {
-      const bytes = estimateBase64Bytes(base64 || '');
+
+    const isDataUrl = typeof raw === 'string' && raw.startsWith('data:');
+    const looksLikeBase64 = typeof raw === 'string' && isLikelyBase64(raw);
+    const isHttpUrl = typeof raw === 'string' && (raw.startsWith('http://') || raw.startsWith('https://') || (raw.startsWith('/') && !looksLikeBase64));
+
+    if (autoFilterToggle && autoFilterToggle.checked && !isHttpUrl) {
+      const bytes = estimateBase64Bytes(raw || '');
       const minBytes = getFinalMinBytes();
       if (bytes !== null && bytes < minBytes) {
         return;
@@ -934,8 +939,8 @@
     img.loading = 'lazy';
     img.decoding = 'async';
     img.alt = meta && meta.sequence ? `image-${meta.sequence}` : 'image';
-    const mime = inferMime(base64);
-    const dataUrl = `data:${mime};base64,${base64}`;
+    const mime = isDataUrl || isHttpUrl ? '' : inferMime(raw);
+    const dataUrl = isDataUrl || isHttpUrl ? raw : `data:${mime};base64,${raw}`;
     img.src = dataUrl;
 
     const metaBar = document.createElement('div');
