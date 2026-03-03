@@ -1048,10 +1048,20 @@ publicRoutes.get("/video/sse", async (c) => {
           // Also check for video generation progress
           const streamingVideoResponse = resp.streamingVideoGenerationResponse as Record<string, unknown> | undefined;
           if (streamingVideoResponse) {
-            emit({
-              type: "progress",
-              ...streamingVideoResponse,
-            });
+            const svr: Record<string, unknown> = { type: "progress", ...streamingVideoResponse };
+            // Proxy video URL so the frontend can play it directly
+            const rawVideoUrl = svr.videoUrl as string | undefined;
+            if (rawVideoUrl && typeof rawVideoUrl === "string") {
+              const encodedV = encodeAssetPath(rawVideoUrl);
+              svr.proxy_video_url = `/images/${encodeURIComponent(encodedV)}`;
+            }
+            // Proxy thumbnail URL
+            const rawThumb = svr.thumbnailImageUrl as string | undefined;
+            if (rawThumb && typeof rawThumb === "string") {
+              const encodedT = encodeAssetPath(rawThumb);
+              svr.proxy_thumbnail_url = `/images/${encodeURIComponent(encodedT)}`;
+            }
+            emit(svr);
           }
         }
 
