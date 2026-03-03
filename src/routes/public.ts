@@ -1375,6 +1375,9 @@ publicRoutes.post("/prompt/enhance", async (c) => {
 // ---------------------------------------------------------------------------
 
 publicRoutes.post("/prompt/enhance/stop", async (c) => {
+  const authed = await verifyPublicAuth(c);
+  if (!authed) return c.json({ error: "Unauthorized" }, 401);
+
   const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
   const requestId = String(body.request_id ?? "").trim();
   if (!requestId) return c.json({ error: "request_id is required" }, 400);
