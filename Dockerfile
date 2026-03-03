@@ -3,11 +3,9 @@ FROM python:3.13-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TZ=Asia/Shanghai \
-    # 把 uv 包安装到系统 Python 环境
-    UV_PROJECT_ENVIRONMENT=/opt/venv
+    VIRTUAL_ENV=/opt/venv
 
-# 确保 uv 的 bin 目录
-ENV PATH="$UV_PROJECT_ENVIRONMENT/bin:$PATH"
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends tzdata ca-certificates \
@@ -15,23 +13,30 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# 安装 uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+RUN python -m venv "$VIRTUAL_ENV" \
+    && pip install --no-cache-dir uv
 
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock /app/
 
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --no-install-project --active
 
-COPY config.defaults.toml ./
-COPY app ./app
-COPY main.py ./
-COPY scripts ./scripts
+# Pre-install Playwright Chromium + OS deps to make auto-register/solver usable in Docker
+# without doing `apt-get` at runtime.
+RUN python -m playwright install --with-deps chromium
 
-RUN mkdir -p /app/data /app/data/tmp /app/logs \
-    && chmod +x /app/scripts/entrypoint.sh
+COPY config.defaults.toml /app/config.defaults.toml
+COPY app /app/app
+COPY main.py /app/main.py
+COPY scripts /app/scripts
+
+# When building on Windows, shell scripts may be copied with CRLF endings and
+# without executable bit. Normalize both to keep ENTRYPOINT reliable.
+RUN sed -i 's/\r$//' /app/scripts/*.sh || true \
+    && chmod +x /app/scripts/*.sh || true
+
+RUN mkdir -p /app/data /app/data/tmp /app/logs
 
 EXPOSE 8000
 
 ENTRYPOINT ["/app/scripts/entrypoint.sh"]
-
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/app/scripts/start.sh"]

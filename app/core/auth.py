@@ -2,16 +2,17 @@
 API 认证模块
 """
 
-from typing import Optional
-from fastapi import HTTPException, status, Security
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from __future__ import annotations
+
+import asyncio
+import json
+from pathlib import Path
+from typing import Optional, Set
+
+from fastapi import HTTPException, Security, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import get_config
-
-DEFAULT_API_KEY = ""
-DEFAULT_APP_KEY = "grok2api"
-DEFAULT_PUBLIC_KEY = ""
-DEFAULT_PUBLIC_ENABLED = False
 
 # 定义 Bearer Scheme
 security = HTTPBearer(
@@ -20,37 +21,70 @@ security = HTTPBearer(
     description="Enter your API Key in the format: Bearer <key>",
 )
 
+LEGACY_API_KEYS_FILE = Path(__file__).parent.parent.parent / "data" / "api_keys.json"
+_legacy_api_keys_cache: Set[str] | None = None
+_legacy_api_keys_mtime: float | None = None
+_legacy_api_keys_lock = asyncio.Lock()
 
-def get_admin_api_key() -> str:
-    """
-    获取后台 API Key。
 
-    为空时表示不启用后台接口认证。
+async def _load_legacy_api_keys() -> Set[str]:
     """
-    api_key = get_config("app.api_key", DEFAULT_API_KEY)
-    return api_key or ""
+    Backward-compatible API keys loader.
 
-def get_app_key() -> str:
+    Older versions stored multiple API keys in `data/api_keys.json` with a shape like:
+    [{"key": "...", "is_active": true, ...}, ...]
     """
-    获取 App Key（后台管理密码）。
-    """
-    app_key = get_config("app.app_key", DEFAULT_APP_KEY)
-    return app_key or ""
+    global _legacy_api_keys_cache, _legacy_api_keys_mtime
 
-def get_public_api_key() -> str:
-    """
-    获取 Public API Key。
+    if not LEGACY_API_KEYS_FILE.exists():
+        _legacy_api_keys_cache = set()
+        _legacy_api_keys_mtime = None
+        return set()
 
-    为空时表示不启用 public 接口认证。
-    """
-    public_key = get_config("app.public_key", DEFAULT_PUBLIC_KEY)
-    return public_key or ""
+    try:
+        stat = LEGACY_API_KEYS_FILE.stat()
+        mtime = stat.st_mtime
+    except Exception:
+        mtime = None
 
-def is_public_enabled() -> bool:
-    """
-    是否开启 public 功能入口。
-    """
-    return bool(get_config("app.public_enabled", DEFAULT_PUBLIC_ENABLED))
+    if _legacy_api_keys_cache is not None and mtime is not None and _legacy_api_keys_mtime == mtime:
+        return _legacy_api_keys_cache
+
+    async with _legacy_api_keys_lock:
+        # Re-check in lock
+        if not LEGACY_API_KEYS_FILE.exists():
+            _legacy_api_keys_cache = set()
+            _legacy_api_keys_mtime = None
+            return set()
+
+        try:
+            stat = LEGACY_API_KEYS_FILE.stat()
+            mtime = stat.st_mtime
+        except Exception:
+            mtime = None
+
+        if _legacy_api_keys_cache is not None and mtime is not None and _legacy_api_keys_mtime == mtime:
+            return _legacy_api_keys_cache
+
+        try:
+            raw = await asyncio.to_thread(LEGACY_API_KEYS_FILE.read_text, "utf-8")
+            data = json.loads(raw) if raw.strip() else []
+        except Exception:
+            data = []
+
+        keys: Set[str] = set()
+        if isinstance(data, list):
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                key = item.get("key")
+                is_active = item.get("is_active", True)
+                if isinstance(key, str) and key.strip() and is_active is not False:
+                    keys.add(key.strip())
+
+        _legacy_api_keys_cache = keys
+        _legacy_api_keys_mtime = mtime
+        return keys
 
 
 async def verify_api_key(
@@ -59,10 +93,14 @@ async def verify_api_key(
     """
     验证 Bearer Token
 
-    如果 config.toml 中未配置 api_key，则不启用认证。
+    - 若 `app.api_key` 未配置且不存在 legacy keys，则跳过验证。
+    - 若配置了 `app.api_key` 或存在 legacy keys，则必须提供 Authorization: Bearer <key>。
     """
-    api_key = get_admin_api_key()
-    if not api_key:
+    api_key = str(get_config("app.api_key", "") or "").strip()
+    legacy_keys = await _load_legacy_api_keys()
+
+    # 如果未配置 API Key 且没有 legacy keys，直接放行
+    if not api_key and not legacy_keys:
         return None
 
     if not auth:
@@ -72,14 +110,15 @@ async def verify_api_key(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if auth.credentials != api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    token = auth.credentials
+    if (api_key and token == api_key) or token in legacy_keys:
+        return token
 
-    return auth.credentials
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid authentication token",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 async def verify_app_key(
@@ -88,9 +127,9 @@ async def verify_app_key(
     """
     验证后台登录密钥（app_key）。
 
-    app_key 必须配置，否则拒绝登录。
+    如果未配置 app_key，则跳过验证。
     """
-    app_key = get_app_key()
+    app_key = str(get_config("app.app_key", "") or "").strip()
 
     if not app_key:
         raise HTTPException(
@@ -116,38 +155,5 @@ async def verify_app_key(
     return auth.credentials
 
 
-async def verify_public_key(
-    auth: Optional[HTTPAuthorizationCredentials] = Security(security),
-) -> Optional[str]:
-    """
-    验证 Public Key（public 接口使用）。
+__all__ = ["verify_api_key", "verify_app_key"]
 
-    默认不公开，需配置 public_key 才能访问；若开启 public_enabled 且未配置 public_key，则放开访问。
-    """
-    public_key = get_public_api_key()
-    public_enabled = is_public_enabled()
-
-    if not public_key:
-        if public_enabled:
-            return None
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Public access is disabled",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    if not auth:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing authentication token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    if auth.credentials != public_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    return auth.credentials
