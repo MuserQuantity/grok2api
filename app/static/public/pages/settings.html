@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport"
+    content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>Grok2API - 设置</title>
+  <link rel="icon" href="/static/common/img/favicon/favicon.ico">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#fafafa">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Grok2API">
+  <link rel="apple-touch-icon" href="/static/public/pwa/apple-touch-icon.png">
+  <script src="/static/vendor/tailwind/tailwindcss-cdn.js"></script>
+  <link href="/static/vendor/geist/geist-sans.css" rel="stylesheet">
+  <link href="/static/vendor/geist/geist-mono.css" rel="stylesheet">
+  <script src="/static/common/js/theme.js?v=0.1.0"></script>
+  <link href="/static/common/css/common.css?v=0.3.8" rel="stylesheet">
+  <link href="/static/public/css/settings.css?v=0.1.0" rel="stylesheet">
+  <link href="/static/common/css/toast.css" rel="stylesheet">
+  <style>html.auth-checking body { opacity: 0; transition: opacity 0.15s; }</style>
+</head>
+
+<body class="public-page min-h-screen flex flex-col" style="background-color: var(--bg);">
+  <div id="toast-container" class="toast-container"></div>
+  <div id="app-header"></div>
+
+  <main class="flex-1 container mx-auto max-w-4xl px-4 sm:px-6 py-5 sm:py-8 fade-in">
+    <div class="space-y-6">
+      <div>
+        <h2 class="text-2xl font-semibold tracking-tight">设置</h2>
+        <p class="text-[var(--accents-4)] mt-1 text-sm">管理偏好设置和账户信息。</p>
+      </div>
+
+      <div class="h-px bg-[var(--border)]"></div>
+
+      <div class="settings-grid">
+
+        <div class="settings-card">
+          <div class="settings-card-title">账户</div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-label">认证状态</div>
+              <div class="settings-label-desc">当前 Public Key 认证状态</div>
+            </div>
+            <div id="auth-status-text" class="settings-value">检查中...</div>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-card-title">外观</div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-label">深夜模式</div>
+              <div class="settings-label-desc">切换深色 / 浅色主题</div>
+            </div>
+            <button id="settings-theme-toggle" class="settings-toggle" type="button" aria-label="切换主题"></button>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-card-title">默认参数</div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-label">默认 NSFW</div>
+              <div class="settings-label-desc">新建任务时默认开启 NSFW</div>
+            </div>
+            <button id="settings-nsfw-toggle" class="settings-toggle" type="button" aria-label="默认NSFW"></button>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-label">自动保存图片</div>
+              <div class="settings-label-desc">生成图片后自动保存到本地</div>
+            </div>
+            <button id="settings-autosave-toggle" class="settings-toggle" type="button" aria-label="自动保存"></button>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-label">默认宽高比</div>
+            </div>
+            <select id="settings-ratio-select" class="geist-input" style="width: 120px;">
+              <option value="2:3">2:3 竖图</option>
+              <option value="1:1">1:1 方图</option>
+              <option value="3:2">3:2 横图</option>
+              <option value="16:9">16:9 宽屏</option>
+              <option value="9:16">9:16 竖屏</option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <div>
+              <div class="settings-label">默认并发数</div>
+            </div>
+            <select id="settings-concurrency-select" class="geist-input" style="width: 120px;">
+              <option value="1">1 个任务</option>
+              <option value="2">2 个任务</option>
+              <option value="3">3 个任务</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <div class="settings-card-title">快捷入口</div>
+          <div class="settings-actions">
+            <a href="/admin/login" class="geist-button-outline" style="text-decoration:none;">管理后台</a>
+            <a href="/portal" class="geist-button-outline" style="text-decoration:none;">返回 Portal</a>
+          </div>
+        </div>
+
+        <div class="settings-card settings-danger-zone">
+          <div class="settings-card-title">危险操作</div>
+          <div class="settings-actions">
+            <button id="settings-logout-btn" type="button" class="geist-button-outline">退出登录</button>
+            <button id="settings-clear-btn" type="button" class="geist-button-danger">清除所有本地数据</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </main>
+
+  <div id="app-footer"></div>
+
+  <script src="/static/common/js/admin-auth.js?v=0.3.0"></script>
+  <script src="/static/common/js/public-auth-guard.js?v=0.1.0"></script>
+  <script src="/static/common/js/public-header.js?v=0.3.3"></script>
+  <script src="/static/common/js/footer.js?v=0.3.0"></script>
+  <script src="/static/common/js/toast.js"></script>
+  <script src="/static/common/js/pwa.js?v=0.1.1"></script>
+  <script src="/static/public/js/settings.js?v=0.1.0"></script>
+</body>
+
+</html>

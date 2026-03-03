@@ -1,0 +1,125 @@
+/* Portal / Dashboard page styles */
+
+.portal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.portal-card {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.1s ease;
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.portal-card:hover {
+  border-color: #000;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+  transform: translateY(-2px);
+}
+
+.portal-card-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: #f5f5f5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accents-6);
+}
+
+.portal-card-icon svg {
+  width: 20px;
+  height: 20px;
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.portal-card-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--accents-7);
+}
+
+.portal-card-desc {
+  font-size: 12px;
+  color: var(--accents-4);
+  line-height: 1.5;
+}
+
+.portal-card-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 500;
+  background: #f0f0f0;
+  color: var(--accents-5);
+  width: fit-content;
+}
+
+.portal-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accents-4);
+  margin-bottom: 4px;
+}
+
+.portal-footer-links {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.portal-footer-links a {
+  font-size: 12px;
+  color: var(--accents-4);
+  transition: color 0.15s;
+}
+
+.portal-footer-links a:hover {
+  color: var(--fg);
+}
+
+/* Dark mode */
+html[data-theme='dark'] .portal-card {
+  background: var(--accents-1);
+  border-color: var(--border);
+}
+
+html[data-theme='dark'] .portal-card:hover {
+  border-color: var(--accents-5);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+}
+
+html[data-theme='dark'] .portal-card-icon {
+  background: var(--border);
+}
+
+html[data-theme='dark'] .portal-card-tag {
+  background: var(--border);
+  color: var(--accents-4);
+}
+
+@media (max-width: 640px) {
+  .portal-grid {
+    grid-template-columns: 1fr;
+  }
+}

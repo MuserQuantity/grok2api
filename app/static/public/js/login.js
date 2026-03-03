@@ -20,7 +20,7 @@ async function login() {
     const ok = await requestPublicLogin(input);
     if (ok) {
       await storePublicKey(input);
-      window.location.href = '/chat';
+      window.location.href = '/portal';
     } else {
       showToast('密钥无效', 'error');
     }
@@ -35,7 +35,7 @@ async function login() {
     if (stored) {
       const ok = await requestPublicLogin(stored);
       if (ok) {
-        window.location.href = '/chat';
+        window.location.href = '/portal';
         return;
       }
       clearStoredPublicKey();
@@ -43,7 +43,7 @@ async function login() {
 
     const ok = await requestPublicLogin('');
     if (ok) {
-      window.location.href = '/chat';
+      window.location.href = '/portal';
     }
   } catch (e) {
     return;
