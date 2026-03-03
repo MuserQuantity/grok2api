@@ -22,7 +22,7 @@ async function login() {
     });
 
     if (res.ok) {
-      await storeAppKey({ username, password });
+      await storeAppKey(password);
       window.location.href = '/admin/token';
     } else {
       showToast('用户名或密码错误', 'error');
@@ -34,19 +34,16 @@ async function login() {
 
 // Auto-redirect checks
 (async () => {
-  const existing = await getStoredAppKey();
-  const existingUsername = (existing && existing.username) ? String(existing.username) : '';
-  const existingPassword = (existing && existing.password) ? String(existing.password) : '';
+  const existingKey = await getStoredAppKey();
 
-  usernameInput.value = existingUsername || 'admin';
+  usernameInput.value = 'admin';
   passwordInput.focus();
 
-  if (!existingPassword) return;
+  if (!existingKey) return;
 
-  fetch('/api/v1/admin/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: usernameInput.value.trim(), password: existingPassword })
+  fetch('/v1/admin/verify', {
+    method: 'GET',
+    headers: { 'Authorization': `Bearer ${existingKey}` }
   }).then(res => {
     if (res.ok) window.location.href = '/admin/token';
   });
