@@ -3,14 +3,34 @@
 """
 
 import sys
+import os
 import json
 import traceback
 from pathlib import Path
 from loguru import logger
 
+# Provide logging.Logger compatibility for legacy calls
+if not hasattr(logger, "isEnabledFor"):
+    logger.isEnabledFor = lambda _level: True
+
 # 日志目录
-LOG_DIR = Path(__file__).parent.parent.parent / "logs"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
+DEFAULT_LOG_DIR = Path(__file__).parent.parent.parent / "logs"
+LOG_DIR = Path(os.getenv("LOG_DIR", str(DEFAULT_LOG_DIR)))
+_LOG_DIR_READY = False
+
+
+def _prepare_log_dir() -> bool:
+    """确保日志目录可用"""
+    global LOG_DIR, _LOG_DIR_READY
+    if _LOG_DIR_READY:
+        return True
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        _LOG_DIR_READY = True
+        return True
+    except Exception:
+        _LOG_DIR_READY = False
+        return False
 
 
 def _format_json(record) -> str:
@@ -20,42 +40,52 @@ def _format_json(record) -> str:
     tz = record["time"].strftime("%z")
     if tz:
         time_str += tz[:3] + ":" + tz[3:]
-    
+
     log_entry = {
         "time": time_str,
         "level": record["level"].name.lower(),
         "msg": record["message"],
         "caller": f"{record['file'].name}:{record['line']}",
     }
-    
+
     # trace 上下文
     extra = record["extra"]
     if extra.get("traceID"):
         log_entry["traceID"] = extra["traceID"]
     if extra.get("spanID"):
         log_entry["spanID"] = extra["spanID"]
-    
+
     # 其他 extra 字段
     for key, value in extra.items():
         if key not in ("traceID", "spanID") and not key.startswith("_"):
             log_entry[key] = value
-    
+
     # 错误及以上级别添加堆栈跟踪
     if record["level"].no >= 40 and record["exception"]:
-        log_entry["stacktrace"] = "".join(traceback.format_exception(
-            record["exception"].type,
-            record["exception"].value,
-            record["exception"].traceback
-        ))
-    
+        log_entry["stacktrace"] = "".join(
+            traceback.format_exception(
+                record["exception"].type,
+                record["exception"].value,
+                record["exception"].traceback,
+            )
+        )
+
     return json.dumps(log_entry, ensure_ascii=False)
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on", "y")
 
 
 def _make_json_sink(output):
     """创建 JSON sink"""
+
     def sink(message):
         json_str = _format_json(message.record)
         print(json_str, file=output, flush=True)
+
     return sink
 
 
@@ -75,7 +105,8 @@ def setup_logging(
 ):
     """设置日志配置"""
     logger.remove()
-    
+    file_logging = _env_flag("LOG_FILE_ENABLED", file_logging)
+
     # 控制台输出
     if json_console:
         logger.add(
@@ -91,16 +122,19 @@ def setup_logging(
             format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{file.name}:{line}</cyan> - <level>{message}</level>",
             colorize=True,
         )
-    
+
     # 文件输出
     if file_logging:
-        logger.add(
-            _file_json_sink,
-            level=level,
-            format="{message}",
-            enqueue=True,
-        )
-    
+        if _prepare_log_dir():
+            logger.add(
+                _file_json_sink,
+                level=level,
+                format="{message}",
+                enqueue=True,
+            )
+        else:
+            logger.warning("File logging disabled: no writable log directory.")
+
     return logger
 
 

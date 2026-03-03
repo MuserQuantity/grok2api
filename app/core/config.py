@@ -13,178 +13,23 @@ import tomllib
 from app.core.logger import logger
 
 DEFAULT_CONFIG_FILE = Path(__file__).parent.parent.parent / "config.defaults.toml"
-LEGACY_CONFIG_FILE = Path(__file__).parent.parent.parent / "data" / "setting.toml"
 
 
-def _as_str(v: Any) -> str:
-    if isinstance(v, str):
-        return v
-    return ""
+def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    """深度合并字典: override 覆盖 base."""
+    if not isinstance(base, dict):
+        return deepcopy(override) if isinstance(override, dict) else deepcopy(base)
 
+    result = deepcopy(base)
+    if not isinstance(override, dict):
+        return result
 
-def _as_int(v: Any) -> int | None:
-    try:
-        if v is None:
-            return None
-        return int(v)
-    except Exception:
-        return None
-
-
-def _as_bool(v: Any) -> bool | None:
-    if isinstance(v, bool):
-        return v
-    return None
-
-
-def _split_csv_tags(v: Any) -> list[str] | None:
-    if not isinstance(v, str):
-        return None
-    parts = [x.strip() for x in v.split(",")]
-    tags = [x for x in parts if x]
-    return tags or None
-
-
-def _legacy_setting_to_config(legacy: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Migrate legacy `data/setting.toml` format (grok/global) to the new config schema.
-
-    Best-effort mapping only for stable fields. It does not delete or rename the legacy file.
-    """
-
-    grok = legacy.get("grok") if isinstance(legacy.get("grok"), dict) else {}
-    global_ = legacy.get("global") if isinstance(legacy.get("global"), dict) else {}
-
-    out: Dict[str, Any] = {}
-
-    # === app ===
-    app_url = _as_str(global_.get("base_url")).strip()
-    admin_username = _as_str(global_.get("admin_username")).strip()
-    app_key = _as_str(global_.get("admin_password")).strip()
-    api_key = _as_str(grok.get("api_key")).strip()
-    image_format = _as_str(global_.get("image_mode")).strip()
-
-    if app_url or admin_username or app_key or api_key or image_format:
-        out["app"] = {}
-        if app_url:
-            out["app"]["app_url"] = app_url
-        if admin_username:
-            out["app"]["admin_username"] = admin_username
-        if app_key:
-            out["app"]["app_key"] = app_key
-        if api_key:
-            out["app"]["api_key"] = api_key
-        if image_format:
-            out["app"]["image_format"] = image_format
-
-    # === grok ===
-    base_proxy_url = _as_str(grok.get("proxy_url")).strip()
-    asset_proxy_url = _as_str(grok.get("cache_proxy_url")).strip()
-    cf_clearance = _as_str(grok.get("cf_clearance")).strip()
-
-    temporary = _as_bool(grok.get("temporary"))
-    thinking = _as_bool(grok.get("show_thinking"))
-    dynamic_statsig = _as_bool(grok.get("dynamic_statsig"))
-    filter_tags = _split_csv_tags(grok.get("filtered_tags"))
-
-    retry_status_codes = grok.get("retry_status_codes")
-
-    timeout = None
-    total_timeout = _as_int(grok.get("stream_total_timeout"))
-    if total_timeout and total_timeout > 0:
-        timeout = total_timeout
-    else:
-        chunk_timeout = _as_int(grok.get("stream_chunk_timeout"))
-        if chunk_timeout and chunk_timeout > 0:
-            timeout = chunk_timeout
-
-    if (
-        base_proxy_url
-        or asset_proxy_url
-        or cf_clearance
-        or temporary is not None
-        or thinking is not None
-        or dynamic_statsig is not None
-        or filter_tags is not None
-        or timeout is not None
-        or isinstance(retry_status_codes, list)
-    ):
-        out["grok"] = {}
-        if base_proxy_url:
-            out["grok"]["base_proxy_url"] = base_proxy_url
-        if asset_proxy_url:
-            out["grok"]["asset_proxy_url"] = asset_proxy_url
-        if cf_clearance:
-            out["grok"]["cf_clearance"] = cf_clearance
-        if temporary is not None:
-            out["grok"]["temporary"] = temporary
-        if thinking is not None:
-            out["grok"]["thinking"] = thinking
-        if dynamic_statsig is not None:
-            out["grok"]["dynamic_statsig"] = dynamic_statsig
-        if filter_tags is not None:
-            out["grok"]["filter_tags"] = filter_tags
-        if timeout is not None:
-            out["grok"]["timeout"] = timeout
-        if isinstance(retry_status_codes, list) and retry_status_codes:
-            out["grok"]["retry_status_codes"] = retry_status_codes
-
-    # === cache ===
-    # Legacy had separate limits; new uses a single total limit_mb.
-    image_mb = _as_int(global_.get("image_cache_max_size_mb")) or 0
-    video_mb = _as_int(global_.get("video_cache_max_size_mb")) or 0
-    if image_mb > 0 or video_mb > 0:
-        out["cache"] = {"limit_mb": max(1, image_mb + video_mb)}
-
-    return out
-
-
-def _apply_legacy_config(
-    config_data: Dict[str, Any],
-    legacy_cfg: Dict[str, Any],
-    defaults: Dict[str, Any],
-) -> bool:
-    """
-    Merge legacy settings into current config:
-    - fill missing keys
-    - override keys that are still default values
-    """
-
-    changed = False
-    for section, items in legacy_cfg.items():
-        if not isinstance(items, dict):
-            continue
-
-        current_section = config_data.get(section)
-        if not isinstance(current_section, dict):
-            current_section = {}
-            config_data[section] = current_section
-            changed = True
-
-        default_section = defaults.get(section) if isinstance(defaults.get(section), dict) else {}
-
-        for key, val in items.items():
-            if val is None:
-                continue
-            if key not in current_section:
-                current_section[key] = val
-                changed = True
-                continue
-
-            default_val = default_section.get(key) if isinstance(default_section, dict) else None
-            current_val = current_section.get(key)
-
-            # NOTE: The admin panel password default used to be `grok2api` in older versions.
-            # Treat it as "still default" so legacy `data/setting.toml` can override it during migration.
-            is_effective_default = current_val == default_val
-            if section == "app" and key == "app_key" and current_val == "grok2api":
-                is_effective_default = True
-
-            if is_effective_default and val != default_val:
-                current_section[key] = val
-                changed = True
-
-    return changed
+    for key, val in override.items():
+        if isinstance(val, dict) and isinstance(result.get(key), dict):
+            result[key] = _deep_merge(result[key], val)
+        else:
+            result[key] = val
+    return result
 
 
 def _migrate_deprecated_config(
@@ -198,7 +43,57 @@ def _migrate_deprecated_config(
     """
     # 配置映射规则：旧配置 -> 新配置
     MIGRATION_MAP = {
-        # performance.* -> 对应的新配置节
+        # grok.* -> 对应的新配置节
+        "grok.temporary": "app.temporary",
+        "grok.disable_memory": "app.disable_memory",
+        "grok.stream": "app.stream",
+        "grok.thinking": "app.thinking",
+        "grok.dynamic_statsig": "app.dynamic_statsig",
+        "grok.filter_tags": "app.filter_tags",
+        "grok.timeout": "voice.timeout",
+        "grok.base_proxy_url": "proxy.base_proxy_url",
+        "grok.asset_proxy_url": "proxy.asset_proxy_url",
+        "network.base_proxy_url": "proxy.base_proxy_url",
+        "network.asset_proxy_url": "proxy.asset_proxy_url",
+        "grok.cf_clearance": "proxy.cf_clearance",
+        "grok.browser": "proxy.browser",
+        "grok.user_agent": "proxy.user_agent",
+        "security.cf_clearance": "proxy.cf_clearance",
+        "security.browser": "proxy.browser",
+        "security.user_agent": "proxy.user_agent",
+        "grok.max_retry": "retry.max_retry",
+        "grok.retry_status_codes": "retry.retry_status_codes",
+        "grok.retry_backoff_base": "retry.retry_backoff_base",
+        "grok.retry_backoff_factor": "retry.retry_backoff_factor",
+        "grok.retry_backoff_max": "retry.retry_backoff_max",
+        "grok.retry_budget": "retry.retry_budget",
+        "grok.video_idle_timeout": "video.stream_timeout",
+        "grok.image_ws_nsfw": "image.nsfw",
+        "grok.image_ws_blocked_seconds": "image.final_timeout",
+        "grok.image_ws_final_min_bytes": "image.final_min_bytes",
+        "grok.image_ws_medium_min_bytes": "image.medium_min_bytes",
+        # legacy sections
+        "network.base_proxy_url": "proxy.base_proxy_url",
+        "network.asset_proxy_url": "proxy.asset_proxy_url",
+        "network.timeout": [
+            "chat.timeout",
+            "image.timeout",
+            "video.timeout",
+            "voice.timeout",
+        ],
+        "security.cf_clearance": "proxy.cf_clearance",
+        "security.browser": "proxy.browser",
+        "security.user_agent": "proxy.user_agent",
+        "timeout.stream_idle_timeout": [
+            "chat.stream_timeout",
+            "image.stream_timeout",
+            "video.stream_timeout",
+        ],
+        "timeout.video_idle_timeout": "video.stream_timeout",
+        "image.image_ws_nsfw": "image.nsfw",
+        "image.image_ws_blocked_seconds": "image.final_timeout",
+        "image.image_ws_final_min_bytes": "image.final_min_bytes",
+        "image.image_ws_medium_min_bytes": "image.medium_min_bytes",
         "performance.assets_max_concurrent": [
             "asset.upload_concurrent",
             "asset.download_concurrent",
@@ -212,16 +107,13 @@ def _migrate_deprecated_config(
         "performance.usage_batch_size": "usage.batch_size",
         "performance.nsfw_max_concurrent": "nsfw.concurrent",
         "performance.nsfw_batch_size": "nsfw.batch_size",
-        # grok.* -> 对应的新配置节
-        "grok.video_idle_timeout": "video.stream_timeout",
-        "grok.image_ws_nsfw": "image.nsfw",
-        "grok.image_ws_blocked_seconds": "image.final_timeout",
-        "grok.image_ws_final_min_bytes": "image.final_min_bytes",
-        "grok.image_ws_medium_min_bytes": "image.medium_min_bytes",
     }
 
-    deprecated_sections = set()
-    result = deepcopy(config)
+    deprecated_sections = set(config.keys()) - valid_sections
+    if not deprecated_sections:
+        return config, set()
+
+    result = {k: deepcopy(v) for k, v in config.items() if k in valid_sections}
     migrated_count = 0
 
     # 处理废弃配置节或旧配置键
@@ -251,6 +143,30 @@ def _migrate_deprecated_config(
                         f"Skip config migration for {old_path}: {e}"
                     )
                     continue
+            if isinstance(result.get(old_section), dict):
+                result[old_section].pop(old_key, None)
+
+    # 兼容旧 chat.* 配置键迁移到 app.*
+    legacy_chat_map = {
+        "temporary": "temporary",
+        "disable_memory": "disable_memory",
+        "stream": "stream",
+        "thinking": "thinking",
+        "dynamic_statsig": "dynamic_statsig",
+        "filter_tags": "filter_tags",
+    }
+    chat_section = config.get("chat")
+    if isinstance(chat_section, dict):
+        app_section = result.setdefault("app", {})
+        for old_key, new_key in legacy_chat_map.items():
+            if old_key in chat_section and new_key not in app_section:
+                app_section[new_key] = chat_section[old_key]
+                if isinstance(result.get("chat"), dict):
+                    result["chat"].pop(old_key, None)
+                migrated_count += 1
+                logger.debug(
+                    f"Migrated config: chat.{old_key} -> app.{new_key} = {chat_section[old_key]}"
+                )
 
     if migrated_count > 0:
         logger.info(
@@ -258,23 +174,6 @@ def _migrate_deprecated_config(
         )
 
     return result, deprecated_sections
-
-
-def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
-    """深度合并字典：override 覆盖 base。"""
-    if not isinstance(base, dict):
-        return deepcopy(override) if isinstance(override, dict) else deepcopy(base)
-
-    result = deepcopy(base)
-    if not isinstance(override, dict):
-        return result
-
-    for key, val in override.items():
-        if isinstance(val, dict) and isinstance(result.get(key), dict):
-            result[key] = _deep_merge(result[key], val)
-        else:
-            result[key] = val
-    return result
 
 
 def _load_defaults() -> Dict[str, Any]:
@@ -298,12 +197,19 @@ class Config:
     def __init__(self):
         self._config = {}
         self._defaults = {}
+        self._code_defaults = {}
         self._defaults_loaded = False
+
+    def register_defaults(self, defaults: Dict[str, Any]):
+        """注册代码中定义的默认值"""
+        self._code_defaults = _deep_merge(self._code_defaults, defaults)
 
     def _ensure_defaults(self):
         if self._defaults_loaded:
             return
-        self._defaults = _load_defaults()
+        file_defaults = _load_defaults()
+        # 合并文件默认值和代码默认值（代码默认值优先级更低）
+        self._defaults = _deep_merge(self._code_defaults, file_defaults)
         self._defaults_loaded = True
 
     async def load(self):
@@ -322,28 +228,15 @@ class Config:
                 local_storage = LocalStorage()
                 from_remote = False
                 try:
+                    # 尝试读取本地配置
                     config_data = await local_storage.load_config()
                 except Exception as e:
                     logger.info(f"Failed to auto-init config from local: {e}")
                     config_data = {}
 
             config_data = config_data or {}
-            before_legacy = deepcopy(config_data)
 
-            # Legacy migration: data/setting.toml -> config schema
-            if LEGACY_CONFIG_FILE.exists():
-                try:
-                    with LEGACY_CONFIG_FILE.open("rb") as f:
-                        legacy_raw = tomllib.load(f) or {}
-                    legacy_cfg = _legacy_setting_to_config(legacy_raw)
-                    if legacy_cfg and _apply_legacy_config(config_data, legacy_cfg, self._defaults):
-                        logger.info(
-                            "Detected legacy data/setting.toml, migrated into config (missing/default keys)."
-                        )
-                except Exception as e:
-                    logger.warning(f"Failed to migrate legacy config from {LEGACY_CONFIG_FILE}: {e}")
-
-            # Migrate deprecated config sections (e.g. performance.* -> chat.*/asset.*/etc.)
+            # 检查是否有废弃的配置节
             valid_sections = set(self._defaults.keys())
             config_data, deprecated_sections = _migrate_deprecated_config(
                 config_data, valid_sections
@@ -356,7 +249,10 @@ class Config:
             merged = _deep_merge(self._defaults, config_data)
 
             # 自动回填缺失配置到存储
-            should_persist = (not from_remote) or (merged != before_legacy) or deprecated_sections
+            # 或迁移了配置后需要更新
+            should_persist = (
+                (not from_remote) or (merged != config_data) or deprecated_sections
+            )
             if should_persist:
                 async with storage.acquire_lock("config_save", timeout=10):
                     await storage.save_config(merged)
@@ -411,4 +307,9 @@ def get_config(key: str, default: Any = None) -> Any:
     return config.get(key, default)
 
 
-__all__ = ["Config", "config", "get_config"]
+def register_defaults(defaults: Dict[str, Any]):
+    """注册默认配置"""
+    config.register_defaults(defaults)
+
+
+__all__ = ["Config", "config", "get_config", "register_defaults"]

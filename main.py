@@ -5,75 +5,156 @@ FastAPI 应用初始化和路由注册
 """
 
 from contextlib import asynccontextmanager
-import asyncio
+import argparse
 import os
 import platform
 import sys
 from pathlib import Path
+from typing import Dict, List
+import asyncio
 
 from dotenv import load_dotenv
+import httpx
 
-env_file = Path(__file__).parent / ".env"
+BASE_DIR = Path(__file__).resolve().parent
+APP_DIR = BASE_DIR / "app"
+
+# Ensure the project root is on sys.path (helps when Vercel sets a different CWD)
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
+env_file = BASE_DIR / ".env"
 if env_file.exists():
     load_dotenv(env_file)
 
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi import Depends
+from fastapi import FastAPI  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from fastapi import Depends  # noqa: E402
 
-from app.core.auth import verify_api_key
-from app.core.config import get_config
-from app.core.logger import logger, setup_logging
-from app.core.exceptions import register_exception_handlers
-from app.core.response_middleware import ResponseLoggerMiddleware
-from app.api.v1.chat import router as chat_router
-from app.api.v1.image import router as image_router
-from app.api.v1.files import router as files_router
-from app.api.v1.models import router as models_router
-from app.api.v1.uploads import router as uploads_router
-from app.services.token import get_scheduler
-
+from app.core.auth import verify_api_key  # noqa: E402
+from app.core.config import get_config  # noqa: E402
+from app.core.logger import logger, setup_logging  # noqa: E402
+from app.core.exceptions import register_exception_handlers  # noqa: E402
+from app.core.response_middleware import ResponseLoggerMiddleware  # noqa: E402
+from app.api.v1.chat import router as chat_router  # noqa: E402
+from app.api.v1.image import router as image_router  # noqa: E402
+from app.api.v1.nsfw import router as nsfw_router  # noqa: E402
+from app.api.v1.files import router as files_router  # noqa: E402
+from app.api.v1.models import router as models_router  # noqa: E402
+from app.api.v1.response import router as responses_router  # noqa: E402
+from app.services.token import get_scheduler  # noqa: E402
+from app.api.v1.admin_api import router as admin_router
+from app.api.v1.public_api import router as public_router
+from app.api.v1.video_api import router as video_router
+from app.api.pages import router as pages_router
+from fastapi.staticfiles import StaticFiles
 
 # 初始化日志
 setup_logging(
-    level=os.getenv("LOG_LEVEL", "INFO"),
-    json_console=False,
-    file_logging=True,
+    level=os.getenv("LOG_LEVEL", "INFO"), json_console=False, file_logging=True
 )
+
+
+FFMPEG_VENDOR_DIR = APP_DIR / "static" / "vendor" / "ffmpeg"
+FFMPEG_VENDOR_ASSETS: Dict[str, List[str]] = {
+    "ffmpeg.js": [
+        "https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js",
+        "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js",
+    ],
+    "814.ffmpeg.js": [
+        "https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/814.ffmpeg.js",
+        "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/814.ffmpeg.js",
+    ],
+    "ffmpeg.js.map": [
+        "https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js.map",
+        "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js.map",
+    ],
+    "814.ffmpeg.js.map": [
+        "https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/814.ffmpeg.js.map",
+        "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/814.ffmpeg.js.map",
+    ],
+    "ffmpeg-util.js": [
+        "https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.js",
+        "https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js",
+    ],
+    "ffmpeg-core.js": [
+        "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js",
+        "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js",
+    ],
+    "ffmpeg-core.wasm": [
+        "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm",
+        "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm",
+    ],
+}
+
+
+async def _download_first_success(
+    client: httpx.AsyncClient, filename: str, urls: List[str], target_path: Path
+) -> bool:
+    for url in urls:
+        try:
+            resp = await client.get(url, follow_redirects=True)
+            if resp.status_code == 200 and resp.content:
+                target_path.write_bytes(resp.content)
+                logger.info(
+                    f"FFmpeg vendor downloaded: {filename} <- {url} ({len(resp.content)} bytes)"
+                )
+                return True
+            logger.warning(
+                f"FFmpeg vendor candidate failed: {filename} <- {url} status={resp.status_code}"
+            )
+        except Exception as e:
+            logger.warning(f"FFmpeg vendor download error: {filename} <- {url}, error={e}")
+    return False
+
+
+async def ensure_ffmpeg_vendor_assets() -> None:
+    """启动时预热 ffmpeg 前端依赖到本地静态目录，避免浏览器跨域/CORS 问题。"""
+    FFMPEG_VENDOR_DIR.mkdir(parents=True, exist_ok=True)
+    timeout = httpx.Timeout(connect=8.0, read=30.0, write=30.0, pool=8.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        tasks = []
+        pending_names: list[str] = []
+        for filename, urls in FFMPEG_VENDOR_ASSETS.items():
+            target = FFMPEG_VENDOR_DIR / filename
+            if target.exists() and target.stat().st_size > 0:
+                logger.info(f"FFmpeg vendor exists: {filename}")
+                continue
+            pending_names.append(filename)
+            tasks.append(_download_first_success(client, filename, urls, target))
+
+        if not tasks:
+            return
+        results = await asyncio.gather(*tasks, return_exceptions=False)
+        failed = [name for name, ok in zip(pending_names, results) if not ok]
+        if failed:
+            logger.warning(f"FFmpeg vendor partial ready, failed={failed}")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
+    # 1. 注册服务默认配置
+    from app.core.config import config, register_defaults
+    from app.services.grok.defaults import get_grok_defaults
 
-    # 0. 兼容迁移：保留旧版 data 目录中的配置/缓存等数据
-    from app.core.legacy_migration import migrate_legacy_cache_dirs, migrate_legacy_account_settings
+    register_defaults(get_grok_defaults())
 
-    await asyncio.to_thread(migrate_legacy_cache_dirs)
-
-    # 1. 加载配置（内部会自动合并 defaults + 兼容 setting.toml）
-    from app.core.config import config
-
+    # 2. 加载配置
     await config.load()
 
-    # 1.1 Old account post-migration settings (TOS + BirthDate + NSFW), best-effort
-    async def _run_legacy_account_migration():
-        try:
-            await migrate_legacy_account_settings(concurrency=10)
-        except Exception as e:
-            logger.warning(f"Legacy account migration failed: {e}")
-
-    asyncio.create_task(_run_legacy_account_migration())
-
-    # 2. 启动服务显示
+    # 3. 启动服务显示
     logger.info("Starting Grok2API...")
     logger.info(f"Platform: {platform.system()} {platform.release()}")
     logger.info(f"Python: {sys.version.split()[0]}")
+    await ensure_ffmpeg_vendor_assets()
 
-    # 3. 启动 Token 刷新调度器
+    # 4. 启动 Token 刷新调度器
     refresh_enabled = get_config("token.auto_refresh", True)
     if refresh_enabled:
-        interval = get_config("token.refresh_interval_hours", 8)
+        basic_interval = get_config("token.refresh_interval_hours", 8)
+        super_interval = get_config("token.super_refresh_interval_hours", 2)
+        interval = min(basic_interval, super_interval)
         scheduler = get_scheduler(interval)
         scheduler.start()
 
@@ -82,14 +163,6 @@ async def lifespan(app: FastAPI):
 
     # 关闭
     logger.info("Shutting down Grok2API...")
-
-    # Best-effort: stop auto-register to avoid blocking shutdown on background threads.
-    try:
-        from app.services.register import get_auto_register_manager
-
-        await get_auto_register_manager().stop_job()
-    except Exception:
-        pass
 
     from app.core.storage import StorageFactory
 
@@ -108,10 +181,6 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    @app.get("/health")
-    async def health():
-        return {"status": "healthy", "service": "Grok2API", "runtime": "python-fastapi"}
-
     # CORS 配置
     app.add_middleware(
         CORSMiddleware,
@@ -128,59 +197,39 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
 
     # 注册路由
-    app.include_router(chat_router, prefix="/v1", dependencies=[Depends(verify_api_key)])
-    app.include_router(image_router, prefix="/v1", dependencies=[Depends(verify_api_key)])
-    app.include_router(models_router, prefix="/v1", dependencies=[Depends(verify_api_key)])
-    app.include_router(uploads_router, prefix="/v1", dependencies=[Depends(verify_api_key)])
+    app.include_router(
+        chat_router, prefix="/v1", dependencies=[Depends(verify_api_key)]
+    )
+    app.include_router(
+        image_router, prefix="/v1", dependencies=[Depends(verify_api_key)]
+    )
+    app.include_router(
+        nsfw_router, prefix="/v1", dependencies=[Depends(verify_api_key)]
+    )
+    app.include_router(
+        models_router, prefix="/v1", dependencies=[Depends(verify_api_key)]
+    )
+    app.include_router(
+        responses_router, prefix="/v1", dependencies=[Depends(verify_api_key)]
+    )
+    # 兼容部分客户端直接请求 /responses（不带 /v1）
+    app.include_router(
+        responses_router, dependencies=[Depends(verify_api_key)]
+    )
+    app.include_router(
+        video_router, prefix="/v1", dependencies=[Depends(verify_api_key)]
+    )
     app.include_router(files_router, prefix="/v1/files")
 
     # 静态文件服务
-    #
-    # NOTE: Starlette/StaticFiles serves JS as `application/javascript` without a charset.
-    # Some browsers/OS locales may then mis-decode UTF-8 and display `????` for Chinese text.
-    # Force `charset=utf-8` for JS to avoid mojibake across environments (local/docker).
-    from fastapi.staticfiles import StaticFiles
-
-    static_dir = Path(__file__).parent / "app" / "static"
+    static_dir = APP_DIR / "static"
     if static_dir.exists():
-        class _UTF8StaticFiles(StaticFiles):
-            async def get_response(self, path: str, scope):  # type: ignore[override]
-                resp = await super().get_response(path, scope)
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-                # Starlette uses `mimetypes` which may vary across OS/distros.
-                # Ensure UTF-8 decoding for text-like assets to avoid mojibake (`????`) on some locales.
-                ctype = (resp.headers.get("content-type", "") or "").strip()
-                ctype_l = ctype.lower()
-                if "charset=" in ctype_l:
-                    return resp
-
-                base = ctype.split(";", 1)[0].strip().lower()
-                is_text = base.startswith("text/")
-                is_js = base in ("application/javascript", "text/javascript")
-                is_json = base == "application/json"
-                is_css = base == "text/css"
-
-                # Some servers might respond with empty content-type for 304 etc; fall back by extension.
-                if not base:
-                    ext = Path(path).suffix.lower()
-                    if ext in (".js", ".mjs"):
-                        resp.headers["content-type"] = "application/javascript; charset=utf-8"
-                    elif ext == ".css":
-                        resp.headers["content-type"] = "text/css; charset=utf-8"
-                    elif ext in (".html", ".htm"):
-                        resp.headers["content-type"] = "text/html; charset=utf-8"
-                    return resp
-
-                if is_text or is_js or is_json or is_css:
-                    resp.headers["content-type"] = f"{base}; charset=utf-8"
-                return resp
-
-        app.mount("/static", _UTF8StaticFiles(directory=static_dir), name="static")
-
-    # 注册管理路由
-    from app.api.v1.admin import router as admin_router
-
-    app.include_router(admin_router)
+    # 注册管理与公共路由
+    app.include_router(admin_router, prefix="/v1/admin")
+    app.include_router(public_router, prefix="/v1/public")
+    app.include_router(pages_router)
 
     return app
 
@@ -191,9 +240,36 @@ app = create_app()
 if __name__ == "__main__":
     import uvicorn
 
-    host = os.getenv("SERVER_HOST", "0.0.0.0")
-    port = int(os.getenv("SERVER_PORT", "8000"))
-    workers = int(os.getenv("SERVER_WORKERS", "1"))
+    parser = argparse.ArgumentParser(description="启动 Grok2API 服务")
+    parser.add_argument(
+        "--host",
+        default=os.getenv("SERVER_HOST", "0.0.0.0"),
+        help="监听地址，默认读取 SERVER_HOST 或 0.0.0.0",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.getenv("SERVER_PORT", "8000")),
+        help="监听端口，默认读取 SERVER_PORT 或 8000",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=int(os.getenv("SERVER_WORKERS", "1")),
+        help="Worker 数量，默认读取 SERVER_WORKERS 或 1",
+    )
+    parser.add_argument(
+        "--reload",
+        action="store_true",
+        help="开启热重载（开发模式）",
+    )
+
+    args = parser.parse_args()
+
+    host = args.host
+    port = args.port
+    workers = args.workers
+    reload_enabled = args.reload
 
     # 平台检查
     is_windows = platform.system() == "Windows"
@@ -202,7 +278,15 @@ if __name__ == "__main__":
     if is_windows and workers > 1:
         logger.warning(
             f"Windows platform detected. Multiple workers ({workers}) is not supported. "
-            "Using single worker instead.",
+            "Using single worker instead."
+        )
+        workers = 1
+
+    # uvicorn 不支持 reload 与多 worker 同时启用
+    if reload_enabled and workers > 1:
+        logger.warning(
+            f"Reload mode detected. Multiple workers ({workers}) is not supported. "
+            "Using single worker instead."
         )
         workers = 1
 
@@ -211,5 +295,6 @@ if __name__ == "__main__":
         host=host,
         port=port,
         workers=workers,
+        reload=reload_enabled,
         log_level=os.getenv("LOG_LEVEL", "INFO").lower(),
     )
