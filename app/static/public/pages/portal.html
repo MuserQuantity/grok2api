@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport"
+    content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>Grok2API - Portal</title>
+  <link rel="icon" href="/static/common/img/favicon/favicon.ico">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#fafafa">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Grok2API">
+  <link rel="apple-touch-icon" href="/static/public/pwa/apple-touch-icon.png">
+  <script src="/static/vendor/tailwind/tailwindcss-cdn.js"></script>
+  <link href="/static/vendor/geist/geist-sans.css" rel="stylesheet">
+  <link href="/static/vendor/geist/geist-mono.css" rel="stylesheet">
+  <script src="/static/common/js/theme.js?v=0.1.0"></script>
+  <link href="/static/common/css/common.css?v=0.3.8" rel="stylesheet">
+  <link href="/static/public/css/portal.css?v=0.1.0" rel="stylesheet">
+  <link href="/static/common/css/toast.css" rel="stylesheet">
+  <style>html.auth-checking body { opacity: 0; transition: opacity 0.15s; }</style>
+</head>
+
+<body class="public-page min-h-screen flex flex-col" style="background-color: var(--bg);">
+  <div id="toast-container" class="toast-container"></div>
+  <div id="app-header"></div>
+
+  <main class="flex-1 container mx-auto max-w-4xl px-4 sm:px-6 py-5 sm:py-8 fade-in">
+    <div class="space-y-6">
+      <div>
+        <h2 class="text-2xl font-semibold tracking-tight">Grok2API Portal</h2>
+        <p class="text-[var(--accents-4)] mt-1 text-sm">选择一个工具开始使用。</p>
+      </div>
+
+      <div class="h-px bg-[var(--border)]"></div>
+
+      <div>
+        <div class="portal-section-title">媒体工具</div>
+        <div class="portal-grid" style="margin-top: 8px;">
+
+          <a href="/imagine" class="portal-card">
+            <div class="portal-card-icon">
+              <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            </div>
+            <div class="portal-card-title">Imagine 瀑布流</div>
+            <div class="portal-card-desc">通过 WebSocket / SSE 持续生成图片，实时展示瀑布流效果。支持编辑、批量下载。</div>
+            <div class="portal-card-tag">WS / SSE</div>
+          </a>
+
+          <a href="/imagine-workbench" class="portal-card">
+            <div class="portal-card-icon">
+              <svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+            </div>
+            <div class="portal-card-title">图片编辑工作台</div>
+            <div class="portal-card-desc">上传 / 粘贴最多 3 张参考图，按 parentPostId 链式编辑，支持编辑历史。</div>
+            <div class="portal-card-tag">多参考图</div>
+          </a>
+
+          <a href="/video" class="portal-card">
+            <div class="portal-card-icon">
+              <svg viewBox="0 0 24 24"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+            </div>
+            <div class="portal-card-title">Video 视频工作台</div>
+            <div class="portal-card-desc">生成短视频，支持参考图、多种预设风格、视频延长拼接、并发生成。</div>
+            <div class="portal-card-tag">延长 / 拼接</div>
+          </a>
+
+          <a href="/nsfw" class="portal-card">
+            <div class="portal-card-icon">
+              <svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+            </div>
+            <div class="portal-card-title">NSFW 工作台</div>
+            <div class="portal-card-desc">先生成 6 张候选图，再选中 1 张按 parentPostId 并行生成视频。</div>
+            <div class="portal-card-tag">图 + 视频</div>
+          </a>
+
+        </div>
+      </div>
+
+      <div>
+        <div class="portal-section-title">对话 & 语音</div>
+        <div class="portal-grid" style="margin-top: 8px;">
+
+          <a href="/chat" class="portal-card">
+            <div class="portal-card-icon">
+              <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            </div>
+            <div class="portal-card-title">Chat 聊天</div>
+            <div class="portal-card-desc">与 Grok 模型进行文字对话。</div>
+            <div class="portal-card-tag">文字</div>
+          </a>
+
+          <a href="/voice" class="portal-card">
+            <div class="portal-card-icon">
+              <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+            </div>
+            <div class="portal-card-title">LiveKit 陪聊</div>
+            <div class="portal-card-desc">实时语音通话，支持多种音色与性格，WebRTC 低延迟。</div>
+            <div class="portal-card-tag">语音</div>
+          </a>
+
+        </div>
+      </div>
+
+      <div class="h-px bg-[var(--border)]"></div>
+
+      <div class="portal-footer-links">
+        <a href="/settings">设置</a>
+        <a href="/admin/login">管理后台</a>
+        <a href="https://github.com/chenyme/grok2api" target="_blank" rel="noopener">GitHub</a>
+      </div>
+    </div>
+  </main>
+
+  <div id="app-footer"></div>
+
+  <script src="/static/common/js/admin-auth.js?v=0.3.0"></script>
+  <script src="/static/common/js/public-auth-guard.js?v=0.1.0"></script>
+  <script src="/static/common/js/public-header.js?v=0.3.3"></script>
+  <script src="/static/common/js/footer.js?v=0.3.0"></script>
+  <script src="/static/common/js/toast.js"></script>
+  <script src="/static/common/js/pwa.js?v=0.1.1"></script>
+</body>
+
+</html>

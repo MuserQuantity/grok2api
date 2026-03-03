@@ -2,7 +2,7 @@
   <div class="max-w-7xl mx-auto px-6 h-14 flex items-center justify-between">
     <div class="flex items-center gap-6 min-w-0">
       <div class="flex items-center gap-2">
-        <a href="https://github.com/chenyme/grok2api" target="_blank" rel="noopener"
+        <a href="/portal"
           class="brand-link font-semibold tracking-tight hover:opacity-80">
           <svg class="github-icon" viewBox="0 0 24 24" aria-hidden="true">
             <path
@@ -15,18 +15,19 @@
       </div>
       <div class="h-4 w-px bg-[var(--border)] public-nav-divider"></div>
       <div class="public-nav-links">
-        <a href="/chat" class="nav-link text-sm" data-nav="/chat">Chat 聊天</a>
-        <a href="/imagine" class="nav-link text-sm" data-nav="/imagine">Imagine 瀑布流</a>
-        <a href="/imagine-workbench" class="nav-link text-sm" data-nav="/imagine-workbench">图片编辑工作台</a>
-        <a href="/video" class="nav-link text-sm" data-nav="/video">Video 视频工作台</a>
-        <a href="/nsfw" class="nav-link text-sm" data-nav="/nsfw">NSFW 工作台</a>
-        <a href="/voice" class="nav-link text-sm" data-nav="/voice">LiveKit 陪聊</a>
+        <a href="/portal" class="nav-link text-sm" data-nav="/portal">Portal</a>
+        <a href="/chat" class="nav-link text-sm" data-nav="/chat">Chat</a>
+        <a href="/imagine" class="nav-link text-sm" data-nav="/imagine">Imagine</a>
+        <a href="/imagine-workbench" class="nav-link text-sm" data-nav="/imagine-workbench">图片工作台</a>
+        <a href="/video" class="nav-link text-sm" data-nav="/video">Video</a>
+        <a href="/nsfw" class="nav-link text-sm" data-nav="/nsfw">NSFW</a>
+        <a href="/voice" class="nav-link text-sm" data-nav="/voice">Voice</a>
       </div>
     </div>
     <div class="nav-actions public-desktop-actions">
+      <a href="/settings" class="nav-action-btn" title="设置">设置</a>
       <button type="button" class="nav-action-btn" data-theme-toggle-btn title="切换深夜模式">深夜模式</button>
       <button type="button" class="nav-action-btn hidden pwa-install-btn" data-pwa-install-btn>安装应用</button>
-      <a href="/admin/login" class="nav-action-btn">管理后台</a>
       <button id="public-logout-btn" onclick="publicLogout()" type="button" class="nav-action-btn">退出</button>
     </div>
     <button id="public-menu-toggle" class="public-menu-toggle" type="button" aria-label="打开功能菜单"
@@ -38,6 +39,7 @@
   </div>
   <div id="public-mobile-menu" class="public-mobile-menu" hidden>
     <div class="public-mobile-menu-inner">
+      <a href="/portal" class="nav-link text-sm" data-nav="/portal">Portal</a>
       <a href="/chat" class="nav-link text-sm" data-nav="/chat">Chat 聊天</a>
       <a href="/imagine" class="nav-link text-sm" data-nav="/imagine">Imagine 瀑布流</a>
       <a href="/imagine-workbench" class="nav-link text-sm" data-nav="/imagine-workbench">图片编辑工作台</a>
@@ -45,9 +47,9 @@
       <a href="/nsfw" class="nav-link text-sm" data-nav="/nsfw">NSFW 工作台</a>
       <a href="/voice" class="nav-link text-sm" data-nav="/voice">LiveKit 陪聊</a>
       <div class="public-mobile-menu-actions">
+        <a href="/settings" class="nav-action-btn">设置</a>
         <button type="button" class="nav-action-btn" data-theme-toggle-btn title="切换深夜模式">深夜模式</button>
         <button type="button" class="nav-action-btn hidden pwa-install-btn" data-pwa-install-btn>安装应用</button>
-        <a href="/admin/login" class="nav-action-btn">管理后台</a>
         <button id="public-mobile-logout-btn" onclick="publicLogout()" type="button" class="nav-action-btn">退出</button>
       </div>
     </div>

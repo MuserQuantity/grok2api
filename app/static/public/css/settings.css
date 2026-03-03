@@ -1,0 +1,117 @@
+/* Settings page styles */
+
+.settings-grid {
+  display: grid;
+  gap: 16px;
+  max-width: 560px;
+}
+
+.settings-card {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+}
+
+.settings-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accents-7);
+  margin-bottom: 12px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.settings-row:first-of-type {
+  padding-top: 0;
+}
+
+.settings-label {
+  font-size: 13px;
+  color: var(--accents-6);
+}
+
+.settings-label-desc {
+  font-size: 11px;
+  color: var(--accents-4);
+  margin-top: 2px;
+}
+
+.settings-value {
+  font-size: 12px;
+  color: var(--accents-4);
+  font-family: 'Geist Mono', monospace;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-toggle {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  background: var(--accents-1);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.settings-toggle.active {
+  background: #000;
+  border-color: #000;
+}
+
+.settings-toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.settings-toggle.active::after {
+  transform: translateX(16px);
+}
+
+.settings-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.settings-danger-zone {
+  border-color: var(--error);
+}
+
+.settings-danger-zone .settings-card-title {
+  color: var(--error);
+}
+
+/* Dark mode */
+html[data-theme='dark'] .settings-card {
+  background: var(--accents-1);
+  border-color: var(--border);
+}
+
+html[data-theme='dark'] .settings-toggle.active {
+  background: var(--success);
+  border-color: var(--success);
+}
