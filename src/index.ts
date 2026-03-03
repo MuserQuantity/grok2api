@@ -3,6 +3,7 @@ import type { Env } from "./env";
 import { openAiRoutes } from "./routes/openai";
 import { mediaRoutes } from "./routes/media";
 import { adminRoutes } from "./routes/admin";
+import { publicRoutes } from "./routes/public";
 import { runKvDailyClear } from "./kv/cleanup";
 
 const app = new Hono<{ Bindings: Env }>();
@@ -82,6 +83,7 @@ app.onError((err, c) => {
 });
 
 app.route("/v1", openAiRoutes);
+app.route("/v1/public", publicRoutes);
 app.route("/", mediaRoutes);
 app.route("/", adminRoutes);
 
@@ -162,6 +164,42 @@ app.get("/admin/chat", (c) => {
   const v = c.req.query("v") ?? "";
   if (v !== buildSha) return c.redirect(`/admin/chat?v=${encodeURIComponent(buildSha)}`, 302);
   return fetchAsset(c, "/chat/chat_admin.html");
+});
+
+// Public-facing feature pages (Imagine waterfall, workbenches, video, voice, NSFW)
+app.get("/imagine", (c) => {
+  const buildSha = getBuildSha(c.env as Env);
+  const v = c.req.query("v") ?? "";
+  if (v !== buildSha) return c.redirect(`/imagine?v=${encodeURIComponent(buildSha)}`, 302);
+  return fetchAsset(c, "/public/pages/imagine.html");
+});
+
+app.get("/imagine-workbench", (c) => {
+  const buildSha = getBuildSha(c.env as Env);
+  const v = c.req.query("v") ?? "";
+  if (v !== buildSha) return c.redirect(`/imagine-workbench?v=${encodeURIComponent(buildSha)}`, 302);
+  return fetchAsset(c, "/public/pages/imagine_workbench.html");
+});
+
+app.get("/video", (c) => {
+  const buildSha = getBuildSha(c.env as Env);
+  const v = c.req.query("v") ?? "";
+  if (v !== buildSha) return c.redirect(`/video?v=${encodeURIComponent(buildSha)}`, 302);
+  return fetchAsset(c, "/public/pages/video.html");
+});
+
+app.get("/voice", (c) => {
+  const buildSha = getBuildSha(c.env as Env);
+  const v = c.req.query("v") ?? "";
+  if (v !== buildSha) return c.redirect(`/voice?v=${encodeURIComponent(buildSha)}`, 302);
+  return fetchAsset(c, "/public/pages/voice.html");
+});
+
+app.get("/nsfw", (c) => {
+  const buildSha = getBuildSha(c.env as Env);
+  const v = c.req.query("v") ?? "";
+  if (v !== buildSha) return c.redirect(`/nsfw?v=${encodeURIComponent(buildSha)}`, 302);
+  return fetchAsset(c, "/public/pages/nsfw.html");
 });
 
 app.get("/static/*", (c) => {
