@@ -628,28 +628,37 @@
     }
   }
 
-  async function saveToFileSystem(base64, filename) {
+  function isUrlInput(val) {
+    return typeof val === 'string' && (val.startsWith('http://') || val.startsWith('https://') || (val.startsWith('/') && !isLikelyBase64(val)));
+  }
+
+  async function saveToFileSystem(input, filename) {
     try {
       if (!directoryHandle) {
         return false;
       }
 
-      const mime = inferMime(base64);
-      const ext = mime === 'image/png' ? 'png' : 'jpg';
+      let blob;
+      if (isUrlInput(input)) {
+        const res = await fetch(input);
+        if (!res.ok) return false;
+        blob = await res.blob();
+      } else {
+        const mime = inferMime(input);
+        const byteString = atob(input);
+        const ab = new ArrayBuffer(byteString.length);
+        const ia = new Uint8Array(ab);
+        for (let i = 0; i < byteString.length; i++) {
+          ia[i] = byteString.charCodeAt(i);
+        }
+        blob = new Blob([ab], { type: mime });
+      }
+
+      const ext = (blob.type && blob.type.includes('png')) ? 'png' : 'jpg';
       const finalFilename = filename.endsWith(`.${ext}`) ? filename : `${filename}.${ext}`;
 
       const fileHandle = await directoryHandle.getFileHandle(finalFilename, { create: true });
       const writable = await fileHandle.createWritable();
-
-      // Convert base64 to blob
-      const byteString = atob(base64);
-      const ab = new ArrayBuffer(byteString.length);
-      const ia = new Uint8Array(ab);
-      for (let i = 0; i < byteString.length; i++) {
-        ia[i] = byteString.charCodeAt(i);
-      }
-      const blob = new Blob([ab], { type: mime });
-
       await writable.write(blob);
       await writable.close();
       return true;
@@ -659,15 +668,29 @@
     }
   }
 
-  function downloadImage(base64, filename) {
-    const mime = inferMime(base64);
-    const dataUrl = `data:${mime};base64,${base64}`;
+  async function downloadImage(input, filename) {
     const link = document.createElement('a');
-    link.href = dataUrl;
+    if (isUrlInput(input)) {
+      try {
+        const res = await fetch(input);
+        if (!res.ok) throw new Error('fetch failed');
+        const blob = await res.blob();
+        link.href = URL.createObjectURL(blob);
+      } catch (e) {
+        // Fallback: let the browser handle the URL directly
+        link.href = input;
+      }
+    } else {
+      const mime = inferMime(input);
+      link.href = `data:${mime};base64,${input}`;
+    }
     link.download = filename;
     link.style.display = 'none';
     document.body.appendChild(link);
     link.click();
+    if (link.href.startsWith('blob:')) {
+      setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+    }
     document.body.removeChild(link);
   }
 
@@ -911,10 +934,15 @@
     }
   }
 
-  function appendImage(base64, meta) {
+  function appendImage(raw, meta) {
     if (!waterfall) return;
-    if (autoFilterToggle && autoFilterToggle.checked) {
-      const bytes = estimateBase64Bytes(base64 || '');
+
+    const isDataUrl = typeof raw === 'string' && raw.startsWith('data:');
+    const looksLikeBase64 = typeof raw === 'string' && isLikelyBase64(raw);
+    const isHttpUrl = typeof raw === 'string' && (raw.startsWith('http://') || raw.startsWith('https://') || (raw.startsWith('/') && !looksLikeBase64));
+
+    if (autoFilterToggle && autoFilterToggle.checked && !isHttpUrl) {
+      const bytes = estimateBase64Bytes(raw || '');
       const minBytes = getFinalMinBytes();
       if (bytes !== null && bytes < minBytes) {
         return;
@@ -934,8 +962,8 @@
     img.loading = 'lazy';
     img.decoding = 'async';
     img.alt = meta && meta.sequence ? `image-${meta.sequence}` : 'image';
-    const mime = inferMime(base64);
-    const dataUrl = `data:${mime};base64,${base64}`;
+    const mime = isDataUrl || isHttpUrl ? '' : inferMime(raw);
+    const dataUrl = isDataUrl || isHttpUrl ? raw : `data:${mime};base64,${raw}`;
     img.src = dataUrl;
 
     const metaBar = document.createElement('div');
@@ -1004,11 +1032,11 @@
       const filename = `${autoNameParts.join('_')}.${ext}`;
 
       if (useFileSystemAPI && directoryHandle) {
-        saveToFileSystem(base64, filename).catch(() => {
-          downloadImage(base64, filename);
+        saveToFileSystem(raw, filename).catch(() => {
+          downloadImage(raw, filename);
         });
       } else {
-        downloadImage(base64, filename);
+        downloadImage(raw, filename);
       }
     }
   }
@@ -1189,7 +1217,7 @@
       updateCount(imageCount);
       updateLatency(data.elapsed_ms);
       updateError('');
-      appendImage(data.b64_json, data);
+      appendImage(data.url || data.b64_json, data);
     } else if (data.type === 'status') {
       if (data.status === 'running') {
         setStatus('connected', '生成中');
