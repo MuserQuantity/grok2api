@@ -3,8 +3,8 @@ Reverse interface: app chat conversations.
 """
 
 import orjson
-import inspect
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 from curl_cffi.requests import AsyncSession
 
 from app.core.logger import logger
@@ -15,6 +15,19 @@ from app.services.reverse.utils.headers import build_headers
 from app.services.reverse.utils.retry import retry_on_status
 
 CHAT_API = "https://grok.com/rest/app-chat/conversations/new"
+
+
+def _normalize_chat_proxy(proxy_url: str) -> str:
+    """Normalize proxy URL for curl-cffi app-chat requests."""
+    if not proxy_url:
+        return proxy_url
+    parsed = urlparse(proxy_url)
+    scheme = parsed.scheme.lower()
+    if scheme == "socks5":
+        return proxy_url.replace("socks5://", "socks5h://", 1)
+    if scheme == "socks4":
+        return proxy_url.replace("socks4://", "socks4a://", 1)
+    return proxy_url
 
 
 class AppChatReverse:
@@ -28,7 +41,6 @@ class AppChatReverse:
         file_attachments: List[str] = None,
         tool_overrides: Dict[str, Any] = None,
         model_config_override: Dict[str, Any] = None,
-        image_generation_count: int | None = None,
     ) -> Dict[str, Any]:
         """Build chat payload for Grok app-chat API."""
 
@@ -54,9 +66,7 @@ class AppChatReverse:
             "forceConcise": False,
             "forceSideBySide": False,
             "imageAttachments": [],
-            "imageGenerationCount": image_generation_count
-            if image_generation_count is not None
-            else 2,
+            "imageGenerationCount": 2,
             "isAsyncChat": False,
             "isReasoning": False,
             "message": message,
@@ -83,12 +93,10 @@ class AppChatReverse:
         token: str,
         message: str,
         model: str,
-        requested_model: str | None = None,
         mode: str = None,
         file_attachments: List[str] = None,
         tool_overrides: Dict[str, Any] = None,
         model_config_override: Dict[str, Any] = None,
-        image_generation_count: int | None = None,
     ) -> Any:
         """Send app chat request to Grok.
         
@@ -108,7 +116,21 @@ class AppChatReverse:
         try:
             # Get proxies
             base_proxy = get_config("proxy.base_proxy_url")
-            proxies = {"http": base_proxy, "https": base_proxy} if base_proxy else None
+            proxy = None
+            proxies = None
+            if base_proxy:
+                normalized_proxy = _normalize_chat_proxy(base_proxy)
+                scheme = urlparse(normalized_proxy).scheme.lower()
+                if scheme.startswith("socks"):
+                    # curl_cffi 对 SOCKS 代理优先使用 proxy 参数，避免被按 HTTP CONNECT 处理
+                    proxy = normalized_proxy
+                else:
+                    proxies = {"http": normalized_proxy, "https": normalized_proxy}
+                logger.info(
+                    f"AppChatReverse proxy enabled: scheme={scheme}, target={normalized_proxy}"
+                )
+            else:
+                logger.warning("AppChatReverse proxy is empty, request will use direct network")
 
             # Build headers
             headers = build_headers(
@@ -126,24 +148,15 @@ class AppChatReverse:
                 file_attachments=file_attachments,
                 tool_overrides=tool_overrides,
                 model_config_override=model_config_override,
-                image_generation_count=image_generation_count,
-            )
-            logger.info(
-                "AppChat request prepared: "
-                f"requested_model={requested_model or model}, "
-                f"upstream_model={model}, "
-                f"mode={mode or '-'}, "
-                f"message_len={len(message or '')}, "
-                f"file_attachments={len(file_attachments or [])}, "
-                f"tools={','.join((tool_overrides or {}).keys()) or '-'}"
             )
 
             # Curl Config
-            timeout = max(
-                float(get_config("chat.timeout") or 0),
-                float(get_config("video.timeout") or 0),
-                float(get_config("image.timeout") or 0),
-            )
+            timeout = float(get_config("chat.timeout") or 0)
+            if timeout <= 0:
+                timeout = max(
+                    float(get_config("video.timeout") or 0),
+                    float(get_config("image.timeout") or 0),
+                )
             browser = get_config("proxy.browser")
 
             async def _do_request():
@@ -153,6 +166,7 @@ class AppChatReverse:
                     data=orjson.dumps(payload),
                     timeout=timeout,
                     stream=True,
+                    proxy=proxy,
                     proxies=proxies,
                     impersonate=browser,
                 )
@@ -166,6 +180,10 @@ class AppChatReverse:
                     except Exception:
                         pass
 
+                    logger.debug(
+                        "AppChatReverse: Chat failed response body: %s",
+                        content,
+                    )
                     logger.error(
                         f"AppChatReverse: Chat failed, {response.status_code}",
                         extra={"error_type": "UpstreamException"},
@@ -196,20 +214,7 @@ class AppChatReverse:
                     async for line in response.aiter_lines():
                         yield line
                 finally:
-                    try:
-                        close_fn = getattr(response, "aclose", None)
-                        if callable(close_fn):
-                            result = close_fn()
-                            if inspect.isawaitable(result):
-                                await result
-                        else:
-                            close_fn = getattr(response, "close", None)
-                            if callable(close_fn):
-                                result = close_fn()
-                                if inspect.isawaitable(result):
-                                    await result
-                    except Exception:
-                        pass
+                    await session.close()
 
             return stream_response()
 

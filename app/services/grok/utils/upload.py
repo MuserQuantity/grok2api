@@ -6,7 +6,6 @@ Upload service for assets.grok.com.
 
 import base64
 import hashlib
-import io
 import mimetypes
 import re
 from pathlib import Path
@@ -14,13 +13,13 @@ from typing import AsyncIterator, Optional, Tuple
 from urllib.parse import urlparse
 
 import aiofiles
-from curl_cffi.requests import AsyncSession
 
 from app.core.config import get_config
 from app.core.exceptions import AppException, UpstreamException, ValidationException
 from app.core.logger import logger
 from app.core.storage import DATA_DIR
 from app.services.reverse.assets_upload import AssetsUploadReverse
+from app.services.reverse.utils.session import ResettableSession
 from app.services.grok.utils.locks import _get_upload_semaphore, _file_lock
 
 
@@ -28,13 +27,17 @@ class UploadService:
     """Assets upload service."""
 
     def __init__(self):
-        self._session: Optional[AsyncSession] = None
+        self._session: Optional[ResettableSession] = None
         self._chunk_size = 64 * 1024
 
-    async def create(self) -> AsyncSession:
+    async def create(self) -> ResettableSession:
         """Create or reuse a session."""
         if self._session is None:
-            self._session = AsyncSession()
+            browser = get_config("proxy.browser")
+            if browser:
+                self._session = ResettableSession(impersonate=browser)
+            else:
+                self._session = ResettableSession()
         return self._session
 
     async def close(self):
@@ -42,112 +45,6 @@ class UploadService:
         if self._session:
             await self._session.close()
             self._session = None
-
-    @staticmethod
-    def _normalize_image_to_jpeg(filename: str, b64: str, mime: str) -> Tuple[str, str, str]:
-        """所有图片统一净化并重编码为 JPEG，消除源图指纹差异。"""
-        safe_mime = str(mime or "").lower().strip()
-        if not safe_mime.startswith("image/"):
-            return filename, b64, mime
-
-        try:
-            from PIL import Image, ImageOps
-        except Exception as e:
-            raise ValidationException(f"Pillow is required for image conversion: {e}")
-
-        try:
-            raw = base64.b64decode(re.sub(r"\s+", "", b64), validate=True)
-        except Exception:
-            raise ValidationException("Invalid image base64 content")
-
-        try:
-            with Image.open(io.BytesIO(raw)) as img:
-                img = ImageOps.exif_transpose(img)
-                width, height = img.size
-                if img.mode in ("RGBA", "LA"):
-                    bg = Image.new("RGB", img.size, (255, 255, 255))
-                    alpha = img.split()[-1]
-                    bg.paste(img.convert("RGBA"), mask=alpha)
-                    out_img = bg
-                else:
-                    out_img = img.convert("RGB")
-
-                # 先做一次无元数据净化，避免源图中异常 profile/块影响上游解析
-                sanitized = Image.new("RGB", out_img.size)
-                sanitized.paste(out_img)
-
-                out = io.BytesIO()
-                # 使用更保守的 baseline JPEG 参数，减少兼容性问题
-                sanitized.save(
-                    out,
-                    format="JPEG",
-                    quality=92,
-                    optimize=False,
-                    progressive=False,
-                    subsampling=2,
-                )
-                jpeg_b64 = base64.b64encode(out.getvalue()).decode()
-                base_name = (filename or "file").rsplit(".", 1)[0]
-                jpeg_name = f"{base_name}.jpg"
-                logger.info(
-                    "Upload image normalized to JPEG: "
-                    f"from={safe_mime}, src_name={filename}, dst_name={jpeg_name}, "
-                    f"size={width}x{height}, out_len={len(jpeg_b64)}, profile=baseline-jpeg"
-                )
-                return jpeg_name, jpeg_b64, "image/jpeg"
-        except Exception as e:
-            raise ValidationException(f"Image conversion to JPEG failed: {e}")
-
-    @staticmethod
-    def _reencode_jpeg_with_profile(
-        b64: str, *, quality: int, optimize: bool, progressive: bool, subsampling: int
-    ) -> str:
-        """按指定 profile 重编码 JPEG，用于上游 400/403 兜底。"""
-        try:
-            from PIL import Image, ImageOps
-        except Exception as e:
-            raise ValidationException(f"Pillow is required for image conversion: {e}")
-
-        try:
-            raw = base64.b64decode(re.sub(r"\s+", "", b64), validate=True)
-        except Exception:
-            raise ValidationException("Invalid image base64 content")
-
-        try:
-            with Image.open(io.BytesIO(raw)) as img:
-                img = ImageOps.exif_transpose(img).convert("RGB")
-                out = io.BytesIO()
-                img.save(
-                    out,
-                    format="JPEG",
-                    quality=max(1, min(quality, 100)),
-                    optimize=optimize,
-                    progressive=progressive,
-                    subsampling=subsampling,
-                )
-                return base64.b64encode(out.getvalue()).decode()
-        except Exception as e:
-            raise ValidationException(f"Image conversion to JPEG failed: {e}")
-
-    @staticmethod
-    def _inspect_image_payload(b64: str) -> Tuple[int, int, int]:
-        """解析图片负载，返回 (宽, 高, 字节大小)。"""
-        try:
-            from PIL import Image
-        except Exception as e:
-            raise ValidationException(f"Pillow is required for image inspection: {e}")
-
-        try:
-            raw = base64.b64decode(re.sub(r"\s+", "", b64), validate=True)
-        except Exception:
-            raise ValidationException("Invalid image base64 content")
-
-        try:
-            with Image.open(io.BytesIO(raw)) as img:
-                width, height = img.size
-            return width, height, len(raw)
-        except Exception as e:
-            raise ValidationException(f"Image inspect failed: {e}")
 
     @staticmethod
     def _is_url(value: str) -> bool:
@@ -250,10 +147,7 @@ class UploadService:
             async with _file_lock(lock_name, timeout=lock_timeout):
                 session = await self.create()
                 response = await session.get(
-                    url,
-                    timeout=timeout,
-                    proxies=proxies,
-                    stream=True,
+                    url, timeout=timeout, proxies=proxies, stream=True
                 )
                 if response.status_code >= 400:
                     raise UpstreamException(
@@ -268,11 +162,7 @@ class UploadService:
                 if not content_type:
                     content_type = self._infer_mime(filename)
                 if hasattr(response, "aiter_content"):
-                    try:
-                        b64 = await self._encode_b64_stream(response.aiter_content())
-                    except Exception:
-                        # 某些响应对象虽存在 aiter_content，但底层未进入 stream 模式；回退读取 content。
-                        b64 = base64.b64encode(response.content).decode()
+                    b64 = await self._encode_b64_stream(response.aiter_content())
                 else:
                     b64 = base64.b64encode(response.content).decode()
 
@@ -331,7 +221,6 @@ class UploadService:
         """
         async with _get_upload_semaphore():
             filename, b64, mime = await self.check_format(file_input)
-            filename, b64, mime = self._normalize_image_to_jpeg(filename, b64, mime)
 
             logger.debug(
                 f"Upload prepare: filename={filename}, type={mime}, size={len(b64)}"
@@ -339,77 +228,21 @@ class UploadService:
 
             if not b64:
                 raise ValidationException("Invalid file input: empty content")
-            if str(mime).lower().startswith("image/"):
-                width, height, raw_size = self._inspect_image_payload(b64)
-                logger.info(
-                    "Upload image stats before request: "
-                    f"filename={filename}, mime={mime}, resolution={width}x{height}, "
-                    f"pixels={width * height}, bytes={raw_size}, b64_len={len(b64)}"
-                )
 
             session = await self.create()
-            try:
-                response = await AssetsUploadReverse.request(
-                    session,
-                    token,
-                    filename,
-                    mime,
-                    b64,
-                )
-                result = response.json()
-                file_id = result.get("fileMetadataId", "")
-                file_uri = result.get("fileUri", "")
-                logger.info(f"Upload success: {filename} -> {file_id}")
-                return file_id, file_uri
-            except UpstreamException as e:
-                status = None
-                if e.details and "status" in e.details:
-                    status = e.details.get("status")
-                if mime != "image/jpeg" or status not in (400, 403):
-                    raise
+            response = await AssetsUploadReverse.request(
+                session,
+                token,
+                filename,
+                mime,
+                b64,
+            )
 
-                # 部分图片会被上游以 400/403 拒绝，切换 JPEG profile 再试一次。
-                fallback_profiles = [
-                    {
-                        "quality": 98,
-                        "optimize": False,
-                        "progressive": False,
-                        "subsampling": 0,
-                    },
-                    {
-                        "quality": 95,
-                        "optimize": False,
-                        "progressive": False,
-                        "subsampling": 2,
-                    },
-                ]
-                last_error = e
-                for idx, profile in enumerate(fallback_profiles, start=1):
-                    try:
-                        b64_retry = self._reencode_jpeg_with_profile(b64, **profile)
-                        logger.warning(
-                            "Upload image fallback re-encode retry: "
-                            f"attempt={idx}, status={status}, profile={profile}, "
-                            f"out_len={len(b64_retry)}"
-                        )
-                        response = await AssetsUploadReverse.request(
-                            session,
-                            token,
-                            filename,
-                            mime,
-                            b64_retry,
-                        )
-                        result = response.json()
-                        file_id = result.get("fileMetadataId", "")
-                        file_uri = result.get("fileUri", "")
-                        logger.info(
-                            f"Upload success after fallback retry: {filename} -> {file_id}"
-                        )
-                        return file_id, file_uri
-                    except UpstreamException as retry_error:
-                        last_error = retry_error
-                        continue
-                raise last_error
+            result = response.json()
+            file_id = result.get("fileMetadataId", "")
+            file_uri = result.get("fileUri", "")
+            logger.info(f"Upload success: {filename} -> {file_id}")
+            return file_id, file_uri
 
 
 __all__ = ["UploadService"]

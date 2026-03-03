@@ -18,6 +18,7 @@ from app.core.storage import DATA_DIR
 from app.core.exceptions import AppException, ErrorType, UpstreamException
 from app.services.grok.utils.process import BaseProcessor
 from app.services.grok.utils.retry import pick_token, rate_limited
+from app.services.grok.utils.response import make_response_id, make_chat_chunk, wrap_image_content
 from app.services.grok.utils.stream import wrap_stream_with_usage
 from app.services.token import EffortType
 from app.services.reverse.ws_imagine import ImagineWebSocketReverse
@@ -49,18 +50,29 @@ class ImageGenerationService:
         aspect_ratio: str,
         stream: bool,
         enable_nsfw: Optional[bool] = None,
+        chat_format: bool = False,
     ) -> ImageGenerationResult:
-        max_token_retries = int(get_config("retry.max_retry"))
+        max_token_retries = int(get_config("retry.max_retry") or 3)
         tried_tokens: set[str] = set()
         last_error: Optional[Exception] = None
 
+        # resolve nsfw once for routing and upstream
+        if enable_nsfw is None:
+            enable_nsfw = bool(get_config("image.nsfw"))
+        prefer_tags = {"nsfw"} if enable_nsfw else None
+
         if stream:
+
             async def _stream_retry() -> AsyncGenerator[str, None]:
                 nonlocal last_error
                 for attempt in range(max_token_retries):
-                    preferred = token if attempt == 0 else None
+                    preferred = token if (attempt == 0 and not prefer_tags) else None
                     current_token = await pick_token(
-                        token_mgr, model_info.model_id, tried_tokens, preferred=preferred
+                        token_mgr,
+                        model_info.model_id,
+                        tried_tokens,
+                        preferred=preferred,
+                        prefer_tags=prefer_tags,
                     )
                     if not current_token:
                         if last_error:
@@ -85,6 +97,7 @@ class ImageGenerationService:
                             size=size,
                             aspect_ratio=aspect_ratio,
                             enable_nsfw=enable_nsfw,
+                            chat_format=chat_format,
                         )
                         async for chunk in result.data:
                             yielded = True
@@ -115,9 +128,13 @@ class ImageGenerationService:
             return ImageGenerationResult(stream=True, data=_stream_retry())
 
         for attempt in range(max_token_retries):
-            preferred = token if attempt == 0 else None
+            preferred = token if (attempt == 0 and not prefer_tags) else None
             current_token = await pick_token(
-                token_mgr, model_info.model_id, tried_tokens, preferred=preferred
+                token_mgr,
+                model_info.model_id,
+                tried_tokens,
+                preferred=preferred,
+                prefer_tags=prefer_tags,
             )
             if not current_token:
                 if last_error:
@@ -135,6 +152,7 @@ class ImageGenerationService:
                     token_mgr=token_mgr,
                     token=current_token,
                     model_info=model_info,
+                    tried_tokens=tried_tokens,
                     prompt=prompt,
                     n=n,
                     response_format=response_format,
@@ -173,15 +191,19 @@ class ImageGenerationService:
         size: str,
         aspect_ratio: str,
         enable_nsfw: Optional[bool] = None,
+        chat_format: bool = False,
     ) -> ImageGenerationResult:
         if enable_nsfw is None:
             enable_nsfw = bool(get_config("image.nsfw"))
+        stream_retries = int(get_config("image.blocked_parallel_attempts") or 5) + 1
+        stream_retries = max(1, min(stream_retries, 10))
         upstream = image_service.stream(
             token=token,
             prompt=prompt,
             aspect_ratio=aspect_ratio,
             n=n,
             enable_nsfw=enable_nsfw,
+            max_retries=stream_retries,
         )
         processor = ImageWSStreamProcessor(
             model_info.model_id,
@@ -189,6 +211,7 @@ class ImageGenerationService:
             n=n,
             response_format=response_format,
             size=size,
+            chat_format=chat_format,
         )
         stream = wrap_stream_with_usage(
             processor.process(upstream),
@@ -204,6 +227,7 @@ class ImageGenerationService:
         token_mgr: Any,
         token: str,
         model_info: Any,
+        tried_tokens: set[str],
         prompt: str,
         n: int,
         response_format: str,
@@ -215,15 +239,19 @@ class ImageGenerationService:
         all_images: List[str] = []
         seen = set()
         expected_per_call = 6
-        max_collect_rounds = max(3, min(30, n * 3))
+        calls_needed = max(1, int(math.ceil(n / expected_per_call)))
+        calls_needed = min(calls_needed, n)
 
-        async def _fetch_batch(call_target: int):
+        async def _fetch_batch(call_target: int, call_token: str):
+            stream_retries = int(get_config("image.blocked_parallel_attempts") or 5) + 1
+            stream_retries = max(1, min(stream_retries, 10))
             upstream = image_service.stream(
-                token=token,
+                token=call_token,
                 prompt=prompt,
                 aspect_ratio=aspect_ratio,
                 n=call_target,
                 enable_nsfw=enable_nsfw,
+                max_retries=stream_retries,
             )
             processor = ImageWSCollectProcessor(
                 model_info.model_id,
@@ -233,55 +261,103 @@ class ImageGenerationService:
             )
             return await processor.process(upstream)
 
-        for round_idx in range(1, max_collect_rounds + 1):
-            remaining = n - len(all_images)
-            if remaining <= 0:
-                break
+        tasks = []
+        for i in range(calls_needed):
+            remaining = n - (i * expected_per_call)
+            call_target = min(expected_per_call, remaining)
+            tasks.append(_fetch_batch(call_target, token))
 
-            calls_needed = max(1, int(math.ceil(remaining / expected_per_call)))
-            calls_needed = min(calls_needed, remaining)
-            tasks = []
-            for i in range(calls_needed):
-                round_remaining = remaining - (i * expected_per_call)
-                call_target = min(expected_per_call, round_remaining)
-                tasks.append(_fetch_batch(call_target))
-
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            added_in_round = 0
-            filtered_png = 0
-
-            for batch in results:
-                if isinstance(batch, Exception):
-                    logger.warning(f"WS batch failed: {batch}")
-                    continue
-                for img in batch:
-                    if self._is_blocked_png_image(img):
-                        filtered_png += 1
-                        continue
-                    if img not in seen:
-                        seen.add(img)
-                        all_images.append(img)
-                        added_in_round += 1
-                    if len(all_images) >= n:
-                        break
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for batch in results:
+            if isinstance(batch, Exception):
+                logger.warning(f"WS batch failed: {batch}")
+                continue
+            for img in batch:
+                if img not in seen:
+                    seen.add(img)
+                    all_images.append(img)
                 if len(all_images) >= n:
                     break
-
-            logger.info(
-                "WS collect round: "
-                f"{round_idx}/{max_collect_rounds}, "
-                f"target={n}, collected={len(all_images)}, "
-                f"added={added_in_round}, filtered_png={filtered_png}"
-            )
-
             if len(all_images) >= n:
                 break
-            if added_in_round == 0 and filtered_png > 0 and round_idx >= 3:
+
+        # If upstream likely blocked/reviewed some images, run extra parallel attempts
+        # and only keep valid finals selected by ws_imagine classification.
+        if len(all_images) < n:
+            remaining = n - len(all_images)
+            extra_attempts = int(get_config("image.blocked_parallel_attempts") or 5)
+            extra_attempts = max(0, min(extra_attempts, 10))
+            parallel_enabled = bool(get_config("image.blocked_parallel_enabled", True))
+            if extra_attempts > 0:
                 logger.warning(
-                    "WS collect appears blocked by png-only results, stop early: "
-                    f"target={n}, collected={len(all_images)}"
+                    f"Image finals insufficient ({len(all_images)}/{n}), running "
+                    f"{extra_attempts} recovery attempts for remaining={remaining}, "
+                    f"parallel_enabled={parallel_enabled}"
                 )
-                break
+                extra_tasks = []
+                if parallel_enabled:
+                    recovery_tried = set(tried_tokens)
+                    recovery_tokens: List[str] = []
+                    for _ in range(extra_attempts):
+                        recovery_token = await pick_token(
+                            token_mgr,
+                            model_info.model_id,
+                            recovery_tried,
+                        )
+                        if not recovery_token:
+                            break
+                        recovery_tried.add(recovery_token)
+                        recovery_tokens.append(recovery_token)
+
+                    if recovery_tokens:
+                        logger.info(
+                            f"Recovery using {len(recovery_tokens)} distinct tokens"
+                        )
+                    for recovery_token in recovery_tokens:
+                        extra_tasks.append(
+                            _fetch_batch(min(expected_per_call, remaining), recovery_token)
+                        )
+                else:
+                    extra_tasks = [
+                        _fetch_batch(min(expected_per_call, remaining), token)
+                        for _ in range(extra_attempts)
+                    ]
+
+                if not extra_tasks:
+                    logger.warning("No tokens available for recovery attempts")
+                    extra_results = []
+                else:
+                    extra_results = await asyncio.gather(*extra_tasks, return_exceptions=True)
+                for batch in extra_results:
+                    if isinstance(batch, Exception):
+                        logger.warning(f"WS recovery batch failed: {batch}")
+                        continue
+                    for img in batch:
+                        if img not in seen:
+                            seen.add(img)
+                            all_images.append(img)
+                        if len(all_images) >= n:
+                            break
+                    if len(all_images) >= n:
+                        break
+                logger.info(
+                    f"Image recovery attempts completed: finals={len(all_images)}/{n}, "
+                    f"attempts={extra_attempts}"
+                )
+
+        if len(all_images) < n:
+            logger.error(
+                f"Image generation failed after recovery attempts: finals={len(all_images)}/{n}, "
+                f"blocked_parallel_attempts={int(get_config('image.blocked_parallel_attempts') or 5)}"
+            )
+            raise UpstreamException(
+                "Image generation blocked or no valid final image",
+                details={
+                    "error_code": "blocked_no_final_image",
+                    "final_images": len(all_images),
+                    "requested": n,
+                },
+            )
 
         try:
             await token_mgr.consume(token, self._get_effort(model_info))
@@ -298,19 +374,6 @@ class ImageGenerationService:
         return ImageGenerationResult(
             stream=False, data=selected, usage_override=usage_override
         )
-
-    @staticmethod
-    def _is_blocked_png_image(image: str) -> bool:
-        value = str(image or "").strip().lower()
-        if not value:
-            return True
-        if value.startswith("data:image/png;base64,"):
-            return True
-        if value.startswith("ivborw0kggo"):
-            return True
-        if ".png" in value:
-            return True
-        return False
 
     @staticmethod
     def _get_effort(model_info: Any) -> EffortType:
@@ -425,30 +488,13 @@ class ImageWSBaseProcessor(BaseProcessor):
     async def _to_output(self, image_id: str, item: Dict) -> str:
         try:
             if self.response_format == "url":
-                res = await self._save_blob(
+                return await self._save_blob(
                     image_id,
                     item.get("blob", ""),
                     item.get("is_final", False),
                     ext=item.get("ext"),
                 )
-                
-                # [NEW] 当图像生成存盘时，保存其 tokenId 用以后续延长关联
-                if res and image_id and getattr(self, "token", None):
-                    from app.services.grok.utils.asset_token_map import AssetTokenMap
-                    token_map = await AssetTokenMap.get_instance()
-                    await token_map.save_mapping(image_id, self.token)
-                    
-                return res
-                
-            res = self._strip_base64(item.get("blob", ""))
-            
-            # [NEW] Base64 响应下同样强绑定
-            if res and image_id and getattr(self, "token", None):
-                from app.services.grok.utils.asset_token_map import AssetTokenMap
-                token_map = await AssetTokenMap.get_instance()
-                await token_map.save_mapping(image_id, self.token)
-                
-            return res
+            return self._strip_base64(item.get("blob", ""))
         except Exception as e:
             logger.warning(f"Image output failed: {e}")
             return ""
@@ -464,14 +510,18 @@ class ImageWSStreamProcessor(ImageWSBaseProcessor):
         n: int = 1,
         response_format: str = "b64_json",
         size: str = "1024x1024",
+        chat_format: bool = False,
     ):
         super().__init__(model, token, response_format)
         self.n = n
         self.size = size
+        self.chat_format = chat_format
         self._target_id: Optional[str] = None
         self._index_map: Dict[str, int] = {}
         self._partial_map: Dict[str, int] = {}
         self._initial_sent: set[str] = set()
+        self._id_generated: bool = False
+        self._response_id: str = ""
 
     def _assign_index(self, image_id: str) -> Optional[int]:
         if image_id in self._index_map:
@@ -486,6 +536,7 @@ class ImageWSStreamProcessor(ImageWSBaseProcessor):
 
     async def process(self, response: AsyncIterable[dict]) -> AsyncGenerator[str, None]:
         images: Dict[str, Dict] = {}
+        emitted_chat_chunk = False
 
         async for item in response:
             if item.get("type") == "error":
@@ -525,6 +576,9 @@ class ImageWSStreamProcessor(ImageWSBaseProcessor):
                 continue
 
             if item.get("stage") != "final":
+                # Chat Completions image stream should only expose final results.
+                if self.chat_format:
+                    continue
                 if image_id not in self._initial_sent:
                     self._initial_sent.add(image_id)
                     stage = item.get("stage") or "preview"
@@ -553,56 +607,86 @@ class ImageWSStreamProcessor(ImageWSBaseProcessor):
                     )
                 else:
                     partial_out = self._strip_base64(item.get("blob", ""))
+
+                if self.chat_format and partial_out:
+                    partial_out = wrap_image_content(partial_out, self.response_format)
+
                 if not partial_out:
                     continue
-                yield self._sse(
-                    "image_generation.partial_image",
-                    {
-                        "type": "image_generation.partial_image",
-                        self.response_field: partial_out,
-                        "created_at": int(time.time()),
-                        "size": self.size,
-                        "index": index,
-                        "partial_image_index": partial_index,
-                        "image_id": image_id,
-                        "stage": stage,
-                    },
-                )
+
+                if self.chat_format:
+                    # OpenAI ChatCompletion chunk format for partial
+                    if not self._id_generated:
+                        self._response_id = make_response_id()
+                        self._id_generated = True
+                    emitted_chat_chunk = True
+                    yield self._sse(
+                        "chat.completion.chunk",
+                        make_chat_chunk(
+                            self._response_id,
+                            self.model,
+                            partial_out,
+                            index=index,
+                        ),
+                    )
+                else:
+                    # Original image_generation format
+                    yield self._sse(
+                        "image_generation.partial_image",
+                        {
+                            "type": "image_generation.partial_image",
+                            self.response_field: partial_out,
+                            "created_at": int(time.time()),
+                            "size": self.size,
+                            "index": index,
+                            "partial_image_index": partial_index,
+                            "image_id": image_id,
+                            "stage": stage,
+                        },
+                    )
 
         if self.n == 1:
-            if self._target_id and self._target_id in images:
-                selected = [(self._target_id, images[self._target_id])]
+            target_item = images.get(self._target_id) if self._target_id else None
+            if target_item and target_item.get("is_final", False):
+                selected = [(self._target_id, target_item)]
+            elif images:
+                selected = [
+                    max(
+                        images.items(),
+                        key=lambda x: (
+                            x[1].get("is_final", False),
+                            x[1].get("blob_size", 0),
+                        ),
+                    )
+                ]
             else:
-                selected = (
-                    [
-                        max(
-                            images.items(),
-                            key=lambda x: (
-                                x[1].get("is_final", False),
-                                x[1].get("blob_size", 0),
-                            ),
-                        )
-                    ]
-                    if images
-                    else []
-                )
+                selected = []
         else:
             selected = [
                 (image_id, images[image_id])
                 for image_id in self._index_map
-                if image_id in images
+                if image_id in images and images[image_id].get("is_final", False)
             ]
 
         for image_id, item in selected:
             if self.response_format == "url":
+                final_image_id = image_id
+                # Keep original imagine image name for imagine chat stream output.
+                if self.model != "grok-imagine-1.0-fast":
+                    final_image_id = f"{image_id}-final"
                 output = await self._save_blob(
-                    f"{image_id}-final",
+                    final_image_id,
                     item.get("blob", ""),
                     item.get("is_final", False),
                     ext=item.get("ext"),
                 )
+                if self.chat_format and output:
+                    output = wrap_image_content(output, self.response_format)
             else:
                 output = await self._to_output(image_id, item)
+                if self.chat_format and output:
+                    output = wrap_image_content(output, self.response_format)
+
             if not output:
                 continue
 
@@ -610,24 +694,61 @@ class ImageWSStreamProcessor(ImageWSBaseProcessor):
                 index = 0
             else:
                 index = self._index_map.get(image_id, 0)
-            yield self._sse(
-                "image_generation.completed",
-                {
-                    "type": "image_generation.completed",
-                    self.response_field: output,
-                    "created_at": int(time.time()),
-                    "size": self.size,
-                    "index": index,
-                    "image_id": image_id,
-                    "stage": "final",
-                    "usage": {
-                        "total_tokens": 0,
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "input_tokens_details": {"text_tokens": 0, "image_tokens": 0},
+
+            if not self._id_generated:
+                self._response_id = make_response_id()
+                self._id_generated = True
+
+            if self.chat_format:
+                # OpenAI ChatCompletion chunk format
+                emitted_chat_chunk = True
+                yield self._sse(
+                    "chat.completion.chunk",
+                    make_chat_chunk(
+                        self._response_id,
+                        self.model,
+                        output,
+                        index=index,
+                        is_final=True,
+                    ),
+                )
+            else:
+                # Original image_generation format
+                yield self._sse(
+                    "image_generation.completed",
+                    {
+                        "type": "image_generation.completed",
+                        self.response_field: output,
+                        "created_at": int(time.time()),
+                        "size": self.size,
+                        "index": index,
+                        "image_id": image_id,
+                        "stage": "final",
+                        "usage": {
+                            "total_tokens": 0,
+                            "input_tokens": 0,
+                            "output_tokens": 0,
+                            "input_tokens_details": {"text_tokens": 0, "image_tokens": 0},
+                        },
                     },
-                },
-            )
+                )
+
+        if self.chat_format:
+            if not self._id_generated:
+                self._response_id = make_response_id()
+                self._id_generated = True
+            if not emitted_chat_chunk:
+                yield self._sse(
+                    "chat.completion.chunk",
+                    make_chat_chunk(
+                        self._response_id,
+                        self.model,
+                        "",
+                        index=0,
+                        is_final=True,
+                    ),
+                )
+            yield "data: [DONE]\n\n"
 
 
 class ImageWSCollectProcessor(ImageWSBaseProcessor):
@@ -654,8 +775,8 @@ class ImageWSCollectProcessor(ImageWSBaseProcessor):
             images[image_id] = self._pick_best(images.get(image_id), item)
 
         selected = sorted(
-            images.values(),
-            key=lambda x: (x.get("is_final", False), x.get("blob_size", 0)),
+            [item for item in images.values() if item.get("is_final", False)],
+            key=lambda x: x.get("blob_size", 0),
             reverse=True,
         )
         if self.n:

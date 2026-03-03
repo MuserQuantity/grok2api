@@ -8,7 +8,6 @@ import re
 from typing import Any, AsyncGenerator, AsyncIterable, Optional
 
 import orjson
-from curl_cffi.requests import AsyncSession
 from curl_cffi.requests.errors import RequestsError
 
 from app.core.logger import logger
@@ -34,6 +33,7 @@ from app.services.reverse.app_chat import AppChatReverse
 from app.services.reverse.media_post import MediaPostReverse
 from app.services.reverse.video_upscale import VideoUpscaleReverse
 from app.services.reverse.assets_list import AssetsListReverse
+from app.services.reverse.utils.session import ResettableSession
 
 _VIDEO_SEMAPHORE = None
 _VIDEO_SEM_VALUE = 0
@@ -46,6 +46,13 @@ def _get_video_semaphore() -> asyncio.Semaphore:
         _VIDEO_SEM_VALUE = value
         _VIDEO_SEMAPHORE = asyncio.Semaphore(value)
     return _VIDEO_SEMAPHORE
+
+
+def _new_session() -> ResettableSession:
+    browser = get_config("proxy.browser")
+    if browser:
+        return ResettableSession(impersonate=browser)
+    return ResettableSession()
 
 
 def _token_tag(token: str) -> str:
@@ -238,7 +245,7 @@ class VideoService:
             prompt_value = prompt if media_type == "MEDIA_POST_TYPE_VIDEO" else ""
             media_value = media_url or ""
 
-            async with AsyncSession() as session:
+            async with _new_session() as session:
                 async with _get_video_semaphore():
                     response = await MediaPostReverse.request(
                         session,
@@ -308,7 +315,7 @@ class VideoService:
 
         async def _stream():
             for attempt in range(1, moderated_max_retry + 1):
-                session = AsyncSession()
+                session = _new_session()
                 moderated_hit = False
                 try:
                     async with _get_video_semaphore():
@@ -402,7 +409,7 @@ class VideoService:
 
         async def _stream():
             for attempt in range(1, moderated_max_retry + 1):
-                session = AsyncSession()
+                session = _new_session()
                 moderated_hit = False
                 try:
                     async with _get_video_semaphore():
@@ -528,7 +535,7 @@ class VideoService:
 
         async def _stream():
             for attempt in range(1, moderated_max_retry + 1):
-                session = AsyncSession()
+                session = _new_session()
                 moderated_hit = False
                 try:
                     async with _get_video_semaphore():
@@ -663,7 +670,7 @@ class VideoService:
 
         async def _stream():
             for attempt in range(1, moderated_max_retry + 1):
-                session = AsyncSession()
+                session = _new_session()
                 moderated_hit = False
                 try:
                     async with _get_video_semaphore():
@@ -981,7 +988,7 @@ class VideoStreamProcessor(BaseProcessor):
             logger.warning("Video upscale skipped: unable to extract video id")
             return video_url
         try:
-            async with AsyncSession() as session:
+            async with _new_session() as session:
                 response = await VideoUpscaleReverse.request(
                     session, self.token, video_id
                 )
@@ -1179,7 +1186,7 @@ class VideoCollectProcessor(BaseProcessor):
             logger.warning("Video upscale skipped: unable to extract video id")
             return video_url
         try:
-            async with AsyncSession() as session:
+            async with _new_session() as session:
                 response = await VideoUpscaleReverse.request(
                     session, self.token, video_id
                 )
@@ -1203,7 +1210,7 @@ class VideoCollectProcessor(BaseProcessor):
         max_pages = 20
         marker = f"/{asset_id}/"
 
-        async with AsyncSession() as session:
+        async with _new_session() as session:
             for attempt in range(1, retries + 1):
                 params = {
                     "pageSize": page_size,
