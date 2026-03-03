@@ -5,6 +5,8 @@ import { mediaRoutes } from "./routes/media";
 import { adminRoutes } from "./routes/admin";
 import { publicRoutes } from "./routes/public";
 import { runKvDailyClear } from "./kv/cleanup";
+import { getSettings } from "./settings";
+import { verifyAdminSession } from "./repo/adminSessions";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -82,6 +84,26 @@ app.onError((err, c) => {
   return withResponseHeaders(res, { "x-grok2api-build": buildSha });
 });
 
+// Admin verify endpoint – must be registered before openAiRoutes to avoid
+// the requireApiAuth middleware that guards /v1/*.
+app.get("/v1/admin/verify", async (c) => {
+  const authHeader = String(c.req.header("Authorization") ?? "").trim();
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  if (!token) return c.json({ error: "Missing credentials" }, 401);
+
+  // First check if the token is a valid admin session
+  const sessionOk = await verifyAdminSession(c.env.DB, token);
+  if (sessionOk) return c.json({ status: "success" });
+
+  // Fall back to checking raw admin password
+  const settings = await getSettings(c.env);
+  if (token === String(settings.global.admin_password ?? "").trim()) {
+    return c.json({ status: "success" });
+  }
+
+  return c.json({ error: "Unauthorized" }, 401);
+});
+
 app.route("/v1", openAiRoutes);
 app.route("/v1/public", publicRoutes);
 app.route("/", mediaRoutes);
@@ -98,7 +120,7 @@ app.get("/v1/files/video/:imgPath{.+}", (c) =>
 
 app.get("/_worker.js", (c) => c.notFound());
 
-app.get("/", (c) => c.redirect("/login", 302));
+app.get("/", (c) => c.redirect("/portal", 302));
 
 app.get("/login", (c) => {
   const buildSha = getBuildSha(c.env as Env);
