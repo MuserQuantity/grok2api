@@ -16,7 +16,7 @@ import {
 } from "../grok/imagineExperimental";
 import { getDynamicHeaders } from "../grok/headers";
 import { uploadImage } from "../grok/upload";
-import { createMediaPost, createPost } from "../grok/create";
+import { createMediaPost } from "../grok/create";
 import { sendConversationRequest } from "../grok/conversation";
 import { listCacheRowsByType } from "../repo/cache";
 
@@ -289,8 +289,6 @@ publicRoutes.get("/imagine/sse", async (c) => {
         const chosen = await selectBestToken(c.env.DB, "grok-imagine-1.0");
         if (!chosen) {
           emit("error", { error: "No available tokens", code: "rate_limit_exceeded" });
-          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-          controller.close();
           return;
         }
 
@@ -953,8 +951,6 @@ publicRoutes.get("/video/sse", async (c) => {
           const chosen = await selectBestToken(c.env.DB, "grok-imagine-1.0-video");
           if (!chosen) {
             emit({ error: "No available tokens", code: "rate_limit_exceeded" });
-            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-            controller.close();
             return;
           }
           chosenToken = chosen.token;
@@ -973,8 +969,6 @@ publicRoutes.get("/video/sse", async (c) => {
 
         if (!postId) {
           emit({ error: "Failed to create video post", code: "post_creation_failed" });
-          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-          controller.close();
           return;
         }
 
