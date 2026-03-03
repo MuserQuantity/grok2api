@@ -129,33 +129,35 @@ function normalizeImagineRatio(value: unknown): string {
   return ALLOWED_RATIOS.has(mapped) ? mapped : "2:3";
 }
 
-// In-memory session store for SSE-based imagine/video tasks
-const SESSIONS = new Map<string, Record<string, unknown>>();
-const SESSION_TTL = 600_000; // 10 minutes
+// KV-backed session store for SSE-based imagine/video tasks.
+// CF Workers may route /start and /sse to different isolates, so in-memory
+// Maps are unreliable. Using KV_CACHE with a TTL ensures sessions survive
+// across isolates.
+const SESSION_TTL_SECONDS = 600; // 10 minutes
+const SESSION_KEY_PREFIX = "sess:";
 
-function cleanSessions(): void {
-  const now = Date.now();
-  for (const [key, info] of SESSIONS) {
-    if (now - Number(info.created_at ?? 0) > SESSION_TTL) {
-      SESSIONS.delete(key);
-    }
-  }
-}
-
-function newSession(data: Record<string, unknown>): string {
-  cleanSessions();
+async function newSession(kv: KVNamespace, data: Record<string, unknown>): Promise<string> {
   const id = crypto.randomUUID().replaceAll("-", "");
-  SESSIONS.set(id, { ...data, created_at: Date.now() });
+  await kv.put(
+    `${SESSION_KEY_PREFIX}${id}`,
+    JSON.stringify({ ...data, created_at: Date.now() }),
+    { expirationTtl: SESSION_TTL_SECONDS },
+  );
   return id;
 }
 
-function getSession(id: string): Record<string, unknown> | null {
-  cleanSessions();
-  return SESSIONS.get(id) ?? null;
+async function getSession(kv: KVNamespace, id: string): Promise<Record<string, unknown> | null> {
+  const raw = await kv.get(`${SESSION_KEY_PREFIX}${id}`);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
 }
 
-function dropSession(id: string): void {
-  SESSIONS.delete(id);
+async function dropSession(kv: KVNamespace, id: string): Promise<void> {
+  await kv.delete(`${SESSION_KEY_PREFIX}${id}`).catch(() => {});
 }
 
 // Image-to-token binding (for edit chains using the same token that generated the image)
@@ -250,7 +252,7 @@ publicRoutes.post("/imagine/start", async (c) => {
 
   const taskIds: string[] = [];
   for (let i = 0; i < concurrent; i++) {
-    taskIds.push(newSession({ type: "imagine", prompt, aspect_ratio: aspectRatio, nsfw }));
+    taskIds.push(await newSession(c.env.KV_CACHE, { type: "imagine", prompt, aspect_ratio: aspectRatio, nsfw }));
   }
 
   return c.json({
@@ -267,7 +269,7 @@ publicRoutes.post("/imagine/start", async (c) => {
 
 publicRoutes.get("/imagine/sse", async (c) => {
   const taskId = String(c.req.query("task_id") ?? "").trim();
-  const session = getSession(taskId);
+  const session = await getSession(c.env.KV_CACHE, taskId);
   if (!session) return c.json({ error: "Task not found" }, 404);
 
   const prompt = String(session.prompt ?? "").trim();
@@ -328,7 +330,7 @@ publicRoutes.get("/imagine/sse", async (c) => {
       } finally {
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         controller.close();
-        dropSession(taskId);
+        await dropSession(c.env.KV_CACHE, taskId);
       }
     },
   });
@@ -689,8 +691,10 @@ publicRoutes.post("/imagine/stop", async (c) => {
   let removed = 0;
   if (Array.isArray(taskIds)) {
     for (const id of taskIds) {
-      if (typeof id === "string" && SESSIONS.has(id)) {
-        dropSession(id);
+      if (typeof id !== "string") continue;
+      const existing = await getSession(c.env.KV_CACHE, id);
+      if (existing) {
+        await dropSession(c.env.KV_CACHE, id);
         removed += 1;
       }
     }
@@ -880,7 +884,7 @@ publicRoutes.post("/video/start", async (c) => {
   const taskIds: string[] = [];
   for (let i = 0; i < concurrent; i++) {
     taskIds.push(
-      newSession({
+      await newSession(c.env.KV_CACHE, {
         type: "video",
         prompt,
         aspect_ratio: aspectRatio,
@@ -918,7 +922,7 @@ publicRoutes.post("/video/start", async (c) => {
 
 publicRoutes.get("/video/sse", async (c) => {
   const taskId = String(c.req.query("task_id") ?? "").trim();
-  const session = getSession(taskId);
+  const session = await getSession(c.env.KV_CACHE, taskId);
   if (!session) return c.json({ error: "Task not found" }, 404);
 
   const prompt = String(session.prompt ?? "").trim();
@@ -1058,7 +1062,7 @@ publicRoutes.get("/video/sse", async (c) => {
       } finally {
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         controller.close();
-        dropSession(taskId);
+        await dropSession(c.env.KV_CACHE, taskId);
       }
     },
   });
@@ -1083,8 +1087,10 @@ publicRoutes.post("/video/stop", async (c) => {
   let removed = 0;
   if (Array.isArray(taskIds)) {
     for (const id of taskIds) {
-      if (typeof id === "string" && SESSIONS.has(id)) {
-        dropSession(id);
+      if (typeof id !== "string") continue;
+      const existing = await getSession(c.env.KV_CACHE, id);
+      if (existing) {
+        await dropSession(c.env.KV_CACHE, id);
         removed += 1;
       }
     }
@@ -1338,6 +1344,7 @@ publicRoutes.post("/prompt/enhance", async (c) => {
       payload,
       cookie,
       settings: settings.grok,
+      signal: abortController.signal,
     });
 
     if (!upstream.ok) {

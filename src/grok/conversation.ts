@@ -163,12 +163,13 @@ export async function sendConversationRequest(args: {
   cookie: string;
   settings: GrokSettings;
   referer?: string;
+  signal?: AbortSignal;
 }): Promise<Response> {
-  const { payload, cookie, settings, referer } = args;
+  const { payload, cookie, settings, referer, signal } = args;
   const headers = getDynamicHeaders(settings, "/rest/app-chat/conversations/new");
   headers.Cookie = cookie;
   if (referer) headers.Referer = referer;
   const body = JSON.stringify(payload);
 
-  return fetch(CONVERSATION_API, { method: "POST", headers, body });
+  return fetch(CONVERSATION_API, { method: "POST", headers, body, signal: signal ?? null });
 }
