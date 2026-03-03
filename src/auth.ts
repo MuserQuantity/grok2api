@@ -68,7 +68,13 @@ export const requireAdminAuth: MiddlewareHandler<{ Bindings: Env }> = async (c, 
   const token = bearerToken(c.req.header("Authorization") ?? null);
   if (!token) return c.json({ error: "缺少会话", code: "MISSING_SESSION" }, 401);
   const ok = await verifyAdminSession(c.env.DB, token);
-  if (!ok) return c.json({ error: "会话已过期", code: "SESSION_EXPIRED" }, 401);
-  return next();
+  if (ok) return next();
+  // Fall back to raw admin password so the unified admin-auth.js (which stores the
+  // password directly instead of a session token) works with all /api/v1/admin/* endpoints.
+  const settings = await getSettings(c.env);
+  if (token === String(settings.global.admin_password ?? "").trim()) {
+    return next();
+  }
+  return c.json({ error: "会话已过期", code: "SESSION_EXPIRED" }, 401);
 };
 

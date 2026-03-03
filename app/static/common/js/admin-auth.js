@@ -229,7 +229,7 @@ async function fetchStorageType() {
   const apiKey = await ensureAdminKey();
   if (apiKey === null) return null;
   try {
-    const res = await fetch('/v1/admin/storage', {
+    const res = await fetch('/api/v1/admin/storage', {
       headers: buildAuthHeaders(apiKey)
     });
     if (!res.ok) return null;
@@ -272,6 +272,9 @@ async function updateStorageModeButton() {
     }
   });
 }
+
+// Backward compatibility: old admin pages call ensureApiKey()
+const ensureApiKey = ensureAdminKey;
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', updateStorageModeButton);
