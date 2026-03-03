@@ -628,28 +628,37 @@
     }
   }
 
-  async function saveToFileSystem(base64, filename) {
+  function isUrlInput(val) {
+    return typeof val === 'string' && (val.startsWith('http://') || val.startsWith('https://') || (val.startsWith('/') && !isLikelyBase64(val)));
+  }
+
+  async function saveToFileSystem(input, filename) {
     try {
       if (!directoryHandle) {
         return false;
       }
 
-      const mime = inferMime(base64);
-      const ext = mime === 'image/png' ? 'png' : 'jpg';
+      let blob;
+      if (isUrlInput(input)) {
+        const res = await fetch(input);
+        if (!res.ok) return false;
+        blob = await res.blob();
+      } else {
+        const mime = inferMime(input);
+        const byteString = atob(input);
+        const ab = new ArrayBuffer(byteString.length);
+        const ia = new Uint8Array(ab);
+        for (let i = 0; i < byteString.length; i++) {
+          ia[i] = byteString.charCodeAt(i);
+        }
+        blob = new Blob([ab], { type: mime });
+      }
+
+      const ext = (blob.type && blob.type.includes('png')) ? 'png' : 'jpg';
       const finalFilename = filename.endsWith(`.${ext}`) ? filename : `${filename}.${ext}`;
 
       const fileHandle = await directoryHandle.getFileHandle(finalFilename, { create: true });
       const writable = await fileHandle.createWritable();
-
-      // Convert base64 to blob
-      const byteString = atob(base64);
-      const ab = new ArrayBuffer(byteString.length);
-      const ia = new Uint8Array(ab);
-      for (let i = 0; i < byteString.length; i++) {
-        ia[i] = byteString.charCodeAt(i);
-      }
-      const blob = new Blob([ab], { type: mime });
-
       await writable.write(blob);
       await writable.close();
       return true;
@@ -659,11 +668,22 @@
     }
   }
 
-  function downloadImage(base64, filename) {
-    const mime = inferMime(base64);
-    const dataUrl = `data:${mime};base64,${base64}`;
+  async function downloadImage(input, filename) {
     const link = document.createElement('a');
-    link.href = dataUrl;
+    if (isUrlInput(input)) {
+      try {
+        const res = await fetch(input);
+        if (!res.ok) throw new Error('fetch failed');
+        const blob = await res.blob();
+        link.href = URL.createObjectURL(blob);
+      } catch (e) {
+        // Fallback: let the browser handle the URL directly
+        link.href = input;
+      }
+    } else {
+      const mime = inferMime(input);
+      link.href = `data:${mime};base64,${input}`;
+    }
     link.download = filename;
     link.style.display = 'none';
     document.body.appendChild(link);
