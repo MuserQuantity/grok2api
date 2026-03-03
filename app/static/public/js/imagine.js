@@ -688,6 +688,9 @@
     link.style.display = 'none';
     document.body.appendChild(link);
     link.click();
+    if (link.href.startsWith('blob:')) {
+      setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+    }
     document.body.removeChild(link);
   }
 
